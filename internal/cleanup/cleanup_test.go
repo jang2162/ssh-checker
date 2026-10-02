@@ -126,7 +126,9 @@ func TestCleanupLeavesNonUUIDNames(t *testing.T) {
 	if err != nil || res != (cleanup.Result{}) {
 		t.Fatalf("result = %+v, %v", res, err)
 	}
-	for _, fqdn := range []string{zone, "www." + zone, "_dmarc." + zone, "gggggggg-gggg-gggg-gggg-gggggggggggg" + "." + zone} {
+	// memory 공급자는 이름을 소문자로 정규화해 저장하므로 확인도 정규화한 이름으로 한다.
+	kept := []string{zone, "www." + zone, "_dmarc." + zone, "8e5700ea-a4bf-41c7-8a77-e990661dcc6a-x." + zone, "gggggggg-gggg-gggg-gggg-gggggggggggg" + "." + zone}
+	for _, fqdn := range kept {
 		if got := e.mem.Values(fqdn); !slices.Equal(got, []string{"keep"}) {
 			t.Errorf("%s = %v; cleanup touched a non-challenge record", fqdn, got)
 		}
