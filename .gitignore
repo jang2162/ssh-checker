@@ -2,3 +2,4 @@
 .superpowers/
 /bin/
 .env
+.claude/worktrees/
