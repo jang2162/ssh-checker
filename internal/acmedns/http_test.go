@@ -1,0 +1,293 @@
+package acmedns_test
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"log/slog"
+	"maps"
+	"net/http"
+	"net/http/httptest"
+	"net/netip"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"ssl-checker/internal/acmedns"
+	"ssl-checker/internal/db/dbtest"
+	"ssl-checker/internal/dnsprovider/memory"
+	"ssl-checker/internal/httpx"
+	"ssl-checker/internal/store"
+)
+
+const adminKey = "test-admin-key-0123456789abcdef0123"
+
+type fixture struct {
+	t    *testing.T
+	h    http.Handler
+	mem  *memory.Provider
+	pool *pgxpool.Pool
+}
+
+type fixtureOpts struct {
+	trusted []netip.Prefix
+	burst   int
+}
+
+func newFixture(t *testing.T, o fixtureOpts) *fixture {
+	t.Helper()
+	if o.burst == 0 {
+		o.burst = 100
+	}
+	pool := dbtest.New(t)
+	mem := memory.New()
+	ip := httpx.ClientIP{Trusted: o.trusted}
+	h := &acmedns.Handler{
+		Svc:         &acmedns.Service{Store: store.New(pool), Provider: mem, Zone: testZone, TTL: 60},
+		IP:          ip,
+		Admin:       httpx.NewAdminAuth(adminKey, ip),
+		UpdateLimit: httpx.NewKeyed(time.Hour, o.burst),
+		Health:      &acmedns.HealthChecker{DB: pool, Provider: mem},
+		Log:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	return &fixture{t: t, h: h.Routes(), mem: mem, pool: pool}
+}
+
+type req struct {
+	method, path, body, remote string
+	headers                    map[string]string
+}
+
+func (f *fixture) do(r req) *httptest.ResponseRecorder {
+	f.t.Helper()
+	hr := httptest.NewRequest(r.method, r.path, strings.NewReader(r.body))
+	if r.remote != "" {
+		hr.RemoteAddr = r.remote
+	}
+	for k, v := range r.headers {
+		hr.Header.Set(k, v)
+	}
+	rec := httptest.NewRecorder()
+	f.h.ServeHTTP(rec, hr)
+	return rec
+}
+
+type registration struct {
+	Username   string   `json:"username"`
+	Password   string   `json:"password"`
+	FullDomain string   `json:"fulldomain"`
+	Subdomain  string   `json:"subdomain"`
+	AllowFrom  []string `json:"allowfrom"`
+}
+
+func registerReq(body string) req {
+	return req{method: "POST", path: "/register", body: body, headers: map[string]string{"Authorization": "Bearer " + adminKey}}
+}
+
+func (f *fixture) register(domain string, allow ...string) registration {
+	f.t.Helper()
+	body, _ := json.Marshal(map[string]any{"domain": domain, "allowfrom": allow})
+	rec := f.do(registerReq(string(body)))
+	if rec.Code != http.StatusCreated {
+		f.t.Fatalf("register: %d %s", rec.Code, rec.Body)
+	}
+	var reg registration
+	if err := json.Unmarshal(rec.Body.Bytes(), &reg); err != nil {
+		f.t.Fatal(err)
+	}
+	return reg
+}
+
+func updateReq(reg registration, value string) req {
+	body, _ := json.Marshal(map[string]string{"subdomain": reg.Subdomain, "txt": value})
+	return req{method: "POST", path: "/update", body: string(body),
+		headers: map[string]string{"X-Api-User": reg.Username, "X-Api-Key": reg.Password}}
+}
+
+func expect(t *testing.T, rec *httptest.ResponseRecorder, status int, body map[string]string) {
+	t.Helper()
+	if rec.Code != status {
+		t.Fatalf("status = %d, want %d (body %s)", rec.Code, status, rec.Body)
+	}
+	var got map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("body %q: %v", rec.Body, err)
+	}
+	if !maps.Equal(got, body) {
+		t.Fatalf("body = %v, want %v", got, body)
+	}
+}
+
+func (f *fixture) txtCount() int {
+	f.t.Helper()
+	var n int
+	if err := f.pool.QueryRow(context.Background(), `SELECT count(*) FROM txt_records`).Scan(&n); err != nil {
+		f.t.Fatal(err)
+	}
+	return n
+}
+
+func TestRegisterEndpoint(t *testing.T) {
+	f := newFixture(t, fixtureOpts{})
+	body := `{"domain":"a.com","allowfrom":["10.1.2.3/16","192.168.0.5"]}`
+	rec := f.do(registerReq(body))
+	if rec.Code != http.StatusCreated || rec.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("%d %v %s", rec.Code, rec.Header(), rec.Body)
+	}
+	var reg registration
+	if err := json.Unmarshal(rec.Body.Bytes(), &reg); err != nil {
+		t.Fatal(err)
+	}
+	if reg.FullDomain != reg.Subdomain+"."+testZone || len(reg.Password) != 40 {
+		t.Fatalf("reg = %+v", reg)
+	}
+	if strings.Join(reg.AllowFrom, ",") != "10.1.0.0/16,192.168.0.5/32" {
+		t.Fatalf("allowfrom = %v", reg.AllowFrom)
+	}
+	var n int
+	if err := f.pool.QueryRow(context.Background(), `SELECT count(*) FROM audit_logs WHERE action = 'register' AND target = 'a.com'`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("audit rows = %d, %v", n, err)
+	}
+}
+
+func TestRegisterRequiresAdminKey(t *testing.T) {
+	f := newFixture(t, fixtureOpts{})
+	for _, h := range []map[string]string{nil, {"Authorization": "Bearer wrong"}} {
+		rec := f.do(req{method: "POST", path: "/register", body: `{"domain":"a.com"}`, headers: h})
+		expect(t, rec, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+	}
+}
+
+func TestRegisterRejectsBadInput(t *testing.T) {
+	f := newFixture(t, fixtureOpts{})
+	expect(t, f.do(registerReq(`{not json`)), http.StatusBadRequest, map[string]string{"error": "malformed_json_payload"})
+	expect(t, f.do(registerReq(`{"domain":"a.com","allowfrom":["10.0.0.0/99"]}`)), http.StatusBadRequest, map[string]string{"error": "invalid_allowfrom_cidr"})
+	expect(t, f.do(registerReq(`{"domain":"*.a.com"}`)), http.StatusBadRequest, map[string]string{"error": "invalid_domain"})
+	f.register("a.com")
+	expect(t, f.do(registerReq(`{"domain":"a.com"}`)), http.StatusConflict, map[string]string{"error": "account_exists"})
+}
+
+func TestUpdateStoresAndRotates(t *testing.T) {
+	f := newFixture(t, fixtureOpts{})
+	reg := f.register("a.com")
+	for _, v := range []string{txt('a'), txt('b'), txt('c')} {
+		expect(t, f.do(updateReq(reg, v)), http.StatusOK, map[string]string{"txt": v})
+	}
+	got := f.mem.Values(reg.FullDomain)
+	if strings.Join(got, ",") != txt('b')+","+txt('c') {
+		t.Fatalf("provider = %v", got)
+	}
+}
+
+func TestUpdateForbidden(t *testing.T) {
+	f := newFixture(t, fixtureOpts{})
+	reg := f.register("a.com")
+	other := f.register("b.com")
+	forbidden := map[string]string{"error": "forbidden"}
+	mutate := func(fn func(*req)) req { r := updateReq(reg, txt('a')); fn(&r); return r }
+	cases := map[string]req{
+		"wrong key":       mutate(func(r *req) { r.headers["X-Api-Key"] = "wrong" }),
+		"long key":        mutate(func(r *req) { r.headers["X-Api-Key"] = strings.Repeat("k", 100) }),
+		"unknown user":    mutate(func(r *req) { r.headers["X-Api-User"] = "11111111-1111-1111-1111-111111111111" }),
+		"non-uuid user":   mutate(func(r *req) { r.headers["X-Api-User"] = "abc" }),
+		"missing headers": mutate(func(r *req) { r.headers = nil }),
+		"other subdomain": mutate(func(r *req) { r.body = `{"subdomain":"` + other.Subdomain + `","txt":"` + txt('a') + `"}` }),
+		"malformed json":  mutate(func(r *req) { r.body = `{not json` }),
+		"empty body":      mutate(func(r *req) { r.body = `` }),
+		"oversized body": mutate(func(r *req) {
+			r.body = `{"subdomain":"` + reg.Subdomain + `","txt":"` + strings.Repeat("a", 5000) + `"}`
+		}),
+		"other account keys": mutate(func(r *req) { r.headers["X-Api-User"] = other.Username; r.headers["X-Api-Key"] = other.Password }),
+	}
+	for name, r := range cases {
+		t.Run(name, func(t *testing.T) { expect(t, f.do(r), http.StatusUnauthorized, forbidden) })
+	}
+	if f.txtCount() != 0 || len(f.mem.Values(reg.FullDomain)) != 0 {
+		t.Fatal("forbidden request wrote values")
+	}
+}
+
+func TestUpdateBadTXT(t *testing.T) {
+	f := newFixture(t, fixtureOpts{})
+	reg := f.register("a.com")
+	for _, v := range []string{"", strings.Repeat("A", 42), strings.Repeat("+", 43)} {
+		expect(t, f.do(updateReq(reg, v)), http.StatusBadRequest, map[string]string{"error": "bad_txt"})
+	}
+}
+
+func TestUpdateAllowFrom(t *testing.T) {
+	f := newFixture(t, fixtureOpts{})
+	reg := f.register("a.com", "10.1.0.0/16")
+	ok := updateReq(reg, txt('a'))
+	ok.remote = "10.1.2.3:4000"
+	expect(t, f.do(ok), http.StatusOK, map[string]string{"txt": txt('a')})
+	denied := updateReq(reg, txt('b'))
+	denied.remote = "10.2.0.1:4000"
+	expect(t, f.do(denied), http.StatusUnauthorized, map[string]string{"error": "forbidden"})
+}
+
+func TestUpdateBehindTrustedProxy(t *testing.T) {
+	f := newFixture(t, fixtureOpts{trusted: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}})
+	reg := f.register("a.com", "192.168.5.0/24")
+	cases := []struct {
+		name, remote, xff string
+		status            int
+	}{
+		{"proxy forwards allowed client", "10.0.0.2:4000", "192.168.5.7", http.StatusOK},
+		{"untrusted client spoofs header", "203.0.113.9:4000", "192.168.5.7", http.StatusUnauthorized},
+		{"spoofed leftmost hop ignored", "10.0.0.2:4000", "192.168.5.7, 203.0.113.50", http.StatusUnauthorized},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := updateReq(reg, txt('a'))
+			r.remote = c.remote
+			r.headers["X-Forwarded-For"] = c.xff
+			if rec := f.do(r); rec.Code != c.status {
+				t.Fatalf("status = %d, want %d (%s)", rec.Code, c.status, rec.Body)
+			}
+		})
+	}
+}
+
+func TestUpdateProviderFailure(t *testing.T) {
+	f := newFixture(t, fixtureOpts{})
+	reg := f.register("a.com")
+	f.mem.SetFailure(errors.New("cloudflare down"))
+	expect(t, f.do(updateReq(reg, txt('a'))), http.StatusInternalServerError, map[string]string{"error": "dns_provider_error"})
+	if f.txtCount() != 0 {
+		t.Fatal("db written despite provider failure")
+	}
+	var detail string
+	if err := f.pool.QueryRow(context.Background(), `SELECT detail FROM audit_logs WHERE action = 'update_failed'`).Scan(&detail); err != nil || !strings.HasPrefix(detail, "transient") {
+		t.Fatalf("audit detail = %q, %v", detail, err)
+	}
+	f.mem.SetFailure(nil)
+	expect(t, f.do(updateReq(reg, txt('a'))), http.StatusOK, map[string]string{"txt": txt('a')})
+}
+
+func TestUpdateRevokedAccount(t *testing.T) {
+	f := newFixture(t, fixtureOpts{})
+	reg := f.register("a.com")
+	if _, err := f.pool.Exec(context.Background(), `UPDATE acme_accounts SET revoked_at = now()`); err != nil {
+		t.Fatal(err)
+	}
+	expect(t, f.do(updateReq(reg, txt('a'))), http.StatusUnauthorized, map[string]string{"error": "forbidden"})
+}
+
+func TestUpdateRateLimit(t *testing.T) {
+	f := newFixture(t, fixtureOpts{burst: 2})
+	reg := f.register("a.com")
+	f.do(updateReq(reg, txt('a')))
+	f.do(updateReq(reg, txt('b')))
+	expect(t, f.do(updateReq(reg, txt('c'))), http.StatusTooManyRequests, map[string]string{"error": "rate_limited"})
+}
+
+func TestHealth(t *testing.T) {
+	f := newFixture(t, fixtureOpts{})
+	expect(t, f.do(req{method: "GET", path: "/health"}), http.StatusOK, map[string]string{"db": "ok", "provider": "ok"})
+	f.mem.SetFailure(errors.New("down"))
+	expect(t, f.do(req{method: "GET", path: "/health"}), http.StatusServiceUnavailable, map[string]string{"db": "ok", "provider": "transient"})
+}
