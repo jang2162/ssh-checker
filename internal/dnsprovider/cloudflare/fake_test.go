@@ -20,6 +20,8 @@ type fakeCF struct {
 	quote      bool // content를 따옴표로 감싸 저장·반환한다
 	maxPerPage int
 
+	ignoreNameFilter bool // name 쿼리를 무시하고 모든 TXT를 돌려준다
+
 	mu         sync.Mutex
 	nextID     int
 	records    map[string]record
@@ -116,7 +118,7 @@ func (f *fakeCF) listRecords(w http.ResponseWriter, r *http.Request) {
 		if t := q.Get("type"); t != "" && rec.Type != t {
 			continue
 		}
-		if n := q.Get("name"); n != "" && rec.Name != n {
+		if n := q.Get("name"); n != "" && rec.Name != n && !f.ignoreNameFilter {
 			continue
 		}
 		matched = append(matched, rec)

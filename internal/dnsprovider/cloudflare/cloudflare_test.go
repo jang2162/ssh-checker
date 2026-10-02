@@ -148,6 +148,32 @@ func TestErrorClassification(t *testing.T) {
 	})
 }
 
+func TestListGuardsAgainstIgnoredNameFilter(t *testing.T) {
+	f := newFakeCF(t)
+	p := f.provider()
+	ctx := context.Background()
+	other, target := "other."+f.zoneName, "target."+f.zoneName
+	if err := p.SetTXT(ctx, other, []string{v('x')}, 60); err != nil {
+		t.Fatal(err)
+	}
+	f.ignoreNameFilter = true
+	if err := p.SetTXT(ctx, target, []string{v('a'), v('b')}, 60); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.values(other); !slices.Equal(got, []string{v('x')}) {
+		t.Fatalf("SetTXT touched other name: %v", got)
+	}
+	if err := p.DeleteTXT(ctx, target); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.values(other); !slices.Equal(got, []string{v('x')}) {
+		t.Fatalf("DeleteTXT touched other name: %v", got)
+	}
+	if got := f.values(target); len(got) != 0 {
+		t.Fatalf("target not deleted: %v", got)
+	}
+}
+
 // TestRealCloudflare는 실제 Cloudflare 존에 적합성 테스트를 돌린다.
 // CF_TEST_TOKEN, CF_TEST_ZONE을 지정했을 때만 실행한다. 운영 존이 아닌 시험용 존을 쓴다.
 func TestRealCloudflare(t *testing.T) {

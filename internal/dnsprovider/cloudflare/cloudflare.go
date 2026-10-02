@@ -236,7 +236,13 @@ func (p *Provider) list(ctx context.Context, zid, name string) ([]record, error)
 		if err != nil {
 			return nil, err
 		}
-		all = append(all, recs...)
+		for _, r := range recs {
+			// name 필터가 무시되더라도 다른 이름의 레코드를 건드리지 않도록 직접 거른다.
+			if name != "" && netutil.NormalizeName(r.Name) != name {
+				continue
+			}
+			all = append(all, r)
+		}
 		if env.ResultInfo == nil || page >= env.ResultInfo.TotalPages {
 			return all, nil
 		}
