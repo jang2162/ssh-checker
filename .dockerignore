@@ -1,0 +1,7 @@
+.git
+.worktrees
+docs
+deploy
+scripts
+test
+*.md

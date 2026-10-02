@@ -1,0 +1,71 @@
+name: ssl-checker
+
+# 비밀값(ADMIN_KEY, CF_API_TOKEN, POSTGRES_PASSWORD)은 Komodo Environment에서 [[이름]] 보간으로만 넣는다.
+# 이 파일과 env_file에 직접 쓰지 않는다.
+x-common-env: &common-env
+  DATABASE_URL: postgres://sslchk:${POSTGRES_PASSWORD}@db:5432/sslchk
+  DNS_PROVIDER: ${DNS_PROVIDER}
+  CF_API_TOKEN: ${CF_API_TOKEN:-}
+  CF_ZONE_ID: ${CF_ZONE_ID:-}
+  CHALLENGE_ZONE: ${CHALLENGE_ZONE}
+  TXT_TTL: ${TXT_TTL:-60}
+
+services:
+  migrate:
+    image: ${IMAGE}:${APP_VERSION}
+    command: ["ssl-checker", "migrate"]
+    environment:
+      DATABASE_URL: postgres://sslchk:${POSTGRES_PASSWORD}@db:5432/sslchk
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    image: ${IMAGE}:${APP_VERSION}
+    command: ["ssl-checker", "serve", "--listen", ":8080"]
+    environment:
+      <<: *common-env
+      ADMIN_KEY: ${ADMIN_KEY}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
+    ports:
+      - "${BIND_ADDR}:${API_PORT:-8080}:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "ssl-checker", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  worker:
+    image: ${IMAGE}:${APP_VERSION}
+    command: ["ssl-checker", "worker"]
+    environment:
+      <<: *common-env
+      CHECK_INTERVAL: ${CHECK_INTERVAL:-6h}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: sslchk
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: sslchk
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sslchk -h 127.0.0.1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  pgdata:
