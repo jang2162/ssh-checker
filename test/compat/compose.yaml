@@ -2,7 +2,9 @@ name: sslchk-compat
 
 services:
   acmedns:
-    image: joohoi/acme-dns:latest
+    # 2026-10-02에 검증한 v2(2026-02-05 빌드) 이미지로 고정한다. v2는 DB 엔진 이름이 `sqlite`라서
+    # (v1의 `sqlite3`는 동작하지 않음) :latest를 쓰면 상류 변경에 게이트가 깨질 수 있다.
+    image: joohoi/acme-dns@sha256:8d327df58b1c9f6361c76734f9761a108fa4f12cf7ca94440a0404a28f75de62
     volumes:
       - ./acme-dns.cfg:/etc/acme-dns/config.cfg:ro
     ports:

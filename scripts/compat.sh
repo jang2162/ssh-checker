@@ -23,4 +23,9 @@ wait_for() {
 wait_for http://127.0.0.1:18080/health
 wait_for http://127.0.0.1:18081/health
 
+# PASS를 어떤 acme-dns 버전과 대조했는지 추적할 수 있게 실제 이미지 다이제스트를 남긴다.
+ACMEDNS_REF=$(docker inspect --format '{{.Config.Image}}' sslchk-compat-acmedns-1)
+echo "acme-dns image: $ACMEDNS_REF"
+docker image inspect --format 'acme-dns digest: {{index .RepoDigests 0}} id: {{.Id}} created: {{.Created}}' "$ACMEDNS_REF"
+
 go test -tags compat -count=1 -v ./test/compat/

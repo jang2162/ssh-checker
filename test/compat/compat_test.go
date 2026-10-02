@@ -52,7 +52,7 @@ func post(t *testing.T, url string, headers map[string]string, body string) repl
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
 	if err != nil {
 		t.Fatalf("POST %s: %v", url, err)
 	}
@@ -92,36 +92,38 @@ func TestUpdateMatchesAcmeDNS(t *testing.T) {
 	stranger := uuid.NewString()
 
 	cases := []struct {
-		name  string
-		build func(c creds) (map[string]string, string)
+		name       string
+		wantStatus int
+		wantTxt    string // 200일 때 기대하는 본문의 txt 값
+		build      func(c creds) (map[string]string, string)
 	}{
-		{"valid", func(c creds) (map[string]string, string) { return auth(c), body(c.Subdomain, valid) }},
-		{"second value", func(c creds) (map[string]string, string) { return auth(c), body(c.Subdomain, strings.Repeat("B", 43)) }},
-		{"third value", func(c creds) (map[string]string, string) { return auth(c), body(c.Subdomain, strings.Repeat("C", 43)) }},
-		{"same value again", func(c creds) (map[string]string, string) { return auth(c), body(c.Subdomain, valid) }},
-		{"wrong key", func(c creds) (map[string]string, string) {
+		{"valid", 200, valid, func(c creds) (map[string]string, string) { return auth(c), body(c.Subdomain, valid) }},
+		{"second value", 200, strings.Repeat("B", 43), func(c creds) (map[string]string, string) { return auth(c), body(c.Subdomain, strings.Repeat("B", 43)) }},
+		{"third value", 200, strings.Repeat("C", 43), func(c creds) (map[string]string, string) { return auth(c), body(c.Subdomain, strings.Repeat("C", 43)) }},
+		{"same value again", 200, valid, func(c creds) (map[string]string, string) { return auth(c), body(c.Subdomain, valid) }},
+		{"wrong key", 401, "", func(c creds) (map[string]string, string) {
 			h := auth(c)
 			h["X-Api-Key"] = "wrong"
 			return h, body(c.Subdomain, valid)
 		}},
-		{"unknown user", func(c creds) (map[string]string, string) {
+		{"unknown user", 401, "", func(c creds) (map[string]string, string) {
 			h := auth(c)
 			h["X-Api-User"] = stranger
 			return h, body(c.Subdomain, valid)
 		}},
-		{"non-uuid user", func(c creds) (map[string]string, string) {
+		{"non-uuid user", 401, "", func(c creds) (map[string]string, string) {
 			h := auth(c)
 			h["X-Api-User"] = "abc"
 			return h, body(c.Subdomain, valid)
 		}},
-		{"missing headers", func(c creds) (map[string]string, string) { return nil, body(c.Subdomain, valid) }},
-		{"subdomain mismatch", func(c creds) (map[string]string, string) { return auth(c), body(stranger, valid) }},
-		{"malformed json", func(c creds) (map[string]string, string) { return auth(c), "{not json" }},
-		{"empty body", func(c creds) (map[string]string, string) { return auth(c), "" }},
-		{"txt 42 chars", func(c creds) (map[string]string, string) { return auth(c), body(c.Subdomain, strings.Repeat("A", 42)) }},
-		{"txt 44 chars", func(c creds) (map[string]string, string) { return auth(c), body(c.Subdomain, strings.Repeat("A", 44)) }},
-		{"txt bad chars", func(c creds) (map[string]string, string) { return auth(c), body(c.Subdomain, strings.Repeat("+", 43)) }},
-		{"txt empty", func(c creds) (map[string]string, string) { return auth(c), body(c.Subdomain, "") }},
+		{"missing headers", 401, "", func(c creds) (map[string]string, string) { return nil, body(c.Subdomain, valid) }},
+		{"subdomain mismatch", 401, "", func(c creds) (map[string]string, string) { return auth(c), body(stranger, valid) }},
+		{"malformed json", 401, "", func(c creds) (map[string]string, string) { return auth(c), "{not json" }},
+		{"empty body", 401, "", func(c creds) (map[string]string, string) { return auth(c), "" }},
+		{"txt 42 chars", 400, "", func(c creds) (map[string]string, string) { return auth(c), body(c.Subdomain, strings.Repeat("A", 42)) }},
+		{"txt 44 chars", 400, "", func(c creds) (map[string]string, string) { return auth(c), body(c.Subdomain, strings.Repeat("A", 44)) }},
+		{"txt bad chars", 400, "", func(c creds) (map[string]string, string) { return auth(c), body(c.Subdomain, strings.Repeat("+", 43)) }},
+		{"txt empty", 400, "", func(c creds) (map[string]string, string) { return auth(c), body(c.Subdomain, "") }},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -129,6 +131,16 @@ func TestUpdateMatchesAcmeDNS(t *testing.T) {
 			h2, b2 := c.build(ours)
 			r1 := post(t, origURL+"/update", h1, b1)
 			r2 := post(t, oursURL+"/update", h2, b2)
+			// 두 서버가 서로 같은 것만으로는 부족하다: 둘 다 같은 오류를 내도 통과해 버린다.
+			if r1.Status != c.wantStatus || r2.Status != c.wantStatus {
+				t.Errorf("want status %d: acme-dns %d %v, ssl-checker %d %v", c.wantStatus, r1.Status, r1.Body, r2.Status, r2.Body)
+			}
+			if c.wantStatus == http.StatusOK {
+				want := map[string]any{"txt": c.wantTxt}
+				if !reflect.DeepEqual(r1.Body, want) || !reflect.DeepEqual(r2.Body, want) {
+					t.Errorf("want body %v: acme-dns %v, ssl-checker %v", want, r1.Body, r2.Body)
+				}
+			}
 			if r1.Status != r2.Status || !reflect.DeepEqual(r1.Body, r2.Body) {
 				t.Errorf("acme-dns: %d %v\nssl-checker: %d %v", r1.Status, r1.Body, r2.Status, r2.Body)
 			}

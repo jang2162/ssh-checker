@@ -12,13 +12,16 @@
 ## 절차
 
 1. 앱 배포: `DNS_PROVIDER=cloudflare`, `CHALLENGE_ZONE=<존>`, `CF_API_TOKEN=<토큰>`(필요하면 `CF_ZONE_ID`)으로 Stack을 배포한다. `curl http://<앱>:8080/health`가 `{"db":"ok","provider":"ok"}`인지 확인한다.
-2. 계정 등록:
+2. 계정 등록 (ADMIN_KEY가 셸 히스토리에 남지 않게 입력으로 받는다):
    ```bash
+   read -rs ADMIN_KEY    # 붙여넣고 Enter. 화면에 표시되지 않는다
    curl -s -X POST http://<앱>:8080/register \
      -H "Authorization: Bearer $ADMIN_KEY" \
      -d '{"domain":"test.a.com","allowfrom":["<테스트 머신 IP>/32"]}'
+   unset ADMIN_KEY
    ```
-   응답의 `username`, `password`, `subdomain`, `fulldomain`을 기록한다. `password`는 다시 볼 수 없다.
+   응답에 일회용 `password`가 들어 있다. 다시 볼 수 없고 비밀이므로 시크릿 저장소나 바로 다음 단계에만 넣고, 티켓·채팅에는 붙이지 않는다. `username`, `subdomain`, `fulldomain`도 기록한다.
+   `/register`와 `/update`는 사내망/VPN 안의 평문 HTTP다. 테스트 계정에는 허용하지만, 운영은 설계대로 내부 전용으로만 둔다.
 3. CNAME 등록: 테스트 도메인 DNS에 `_acme-challenge.test.a.com. CNAME <fulldomain>.`을 넣고 확인한다.
    ```bash
    dig +short CNAME _acme-challenge.test.a.com @1.1.1.1   # <fulldomain>. 이 나와야 한다
@@ -29,7 +32,7 @@
    ~/.acme.sh/acme.sh --version          # 3.1.4 이상
    export ACMEDNS_BASE_URL="http://<앱>:8080"
    export ACMEDNS_USERNAME="<username>"
-   export ACMEDNS_PASSWORD="<password>"
+   read -rs ACMEDNS_PASSWORD && export ACMEDNS_PASSWORD   # 비밀번호는 입력으로 받는다
    export ACMEDNS_SUBDOMAIN="<subdomain>"
    ~/.acme.sh/acme.sh --issue --staging --dns dns_acmedns -d test.a.com -d '*.test.a.com'
    ```
@@ -43,10 +46,12 @@
 ## 정리
 
 ```bash
-~/.acme.sh/acme.sh --remove -d test.a.com --staging
+~/.acme.sh/acme.sh --remove -d test.a.com --ecc
+sed -i '/^SAVED_ACMEDNS_/d' ~/.acme.sh/account.conf   # acme.sh가 저장한 자격 증명 삭제
+unset ACMEDNS_BASE_URL ACMEDNS_USERNAME ACMEDNS_PASSWORD ACMEDNS_SUBDOMAIN
 ```
 
-테스트 계정 폐기는 2단계의 관리 API(`DELETE /api/domains/{id}`)가 생기면 그것으로 한다. 그 전에는 `UPDATE acme_accounts SET revoked_at = now() WHERE subdomain = '<subdomain>'`로 폐기하고, 다음 worker 정리 때 TXT가 지워지는지 확인한다.
+테스트 계정은 게이트가 끝나면 반드시 폐기한다. 폐기는 2단계의 관리 API(`DELETE /api/domains/{id}`)가 생기면 그것으로 한다. 그 전에는 `UPDATE acme_accounts SET revoked_at = now() WHERE subdomain = '<subdomain>'`로 폐기하고, 다음 worker 정리 때 TXT가 지워지는지 확인한다.
 
 ## 실패 시
 
