@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"time"
 
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
@@ -21,6 +22,10 @@ var (
 	ErrBadTXT        = errors.New("acmedns: bad txt")
 	ErrInvalidDomain = errors.New("acmedns: invalid domain")
 )
+
+// providerWriteTimeout은 /update 한 번의 공급자 반영 시간 상한이다.
+// 계정 행 잠금과 풀 연결을 쥔 채 기다리므로, 핸들러가 서버의 WriteTimeout(30초) 안에 끝나게 한다.
+const providerWriteTimeout = 20 * time.Second
 
 // dummyHash는 없는 계정으로 인증할 때도 bcrypt 비교를 해서, 계정 존재 여부가 응답 시간으로 드러나지 않게 한다.
 var dummyHash, _ = bcrypt.GenerateFromPassword([]byte("ssl-checker-dummy-password"), bcrypt.DefaultCost)
@@ -100,7 +105,9 @@ func (s *Service) UpdateTXT(ctx context.Context, acct store.Account, value strin
 	fqdn := s.FQDN(acct.Subdomain)
 	return s.Store.UpdateTXT(ctx, acct.ID, func(current []string) ([]string, error) {
 		next := NextValues(current, value)
-		if err := s.Provider.SetTXT(ctx, fqdn, next, s.TTL); err != nil {
+		pctx, cancel := context.WithTimeout(ctx, providerWriteTimeout)
+		defer cancel()
+		if err := s.Provider.SetTXT(pctx, fqdn, next, s.TTL); err != nil {
 			return nil, err
 		}
 		return next, nil

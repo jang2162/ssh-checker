@@ -10,10 +10,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"ssl-checker/internal/acmedns"
@@ -34,8 +37,9 @@ type fixture struct {
 }
 
 type fixtureOpts struct {
-	trusted []netip.Prefix
-	burst   int
+	trusted       []netip.Prefix
+	burst         int
+	authFailBurst int
 }
 
 func newFixture(t *testing.T, o fixtureOpts) *fixture {
@@ -43,16 +47,22 @@ func newFixture(t *testing.T, o fixtureOpts) *fixture {
 	if o.burst == 0 {
 		o.burst = 100
 	}
+	if o.authFailBurst == 0 {
+		o.authFailBurst = 100
+	}
 	pool := dbtest.New(t)
 	mem := memory.New()
 	ip := httpx.ClientIP{Trusted: o.trusted}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	admin := httpx.NewAdminAuth(adminKey, ip)
 	h := &acmedns.Handler{
-		Svc:         &acmedns.Service{Store: store.New(pool), Provider: mem, Zone: testZone, TTL: 60},
-		IP:          ip,
-		Admin:       httpx.NewAdminAuth(adminKey, ip),
-		UpdateLimit: httpx.NewKeyed(time.Hour, o.burst),
-		Health:      &acmedns.HealthChecker{DB: pool, Provider: mem},
-		Log:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Svc:           &acmedns.Service{Store: store.New(pool), Provider: mem, Zone: testZone, TTL: 60},
+		IP:            ip,
+		Admin:         admin,
+		UpdateLimit:   httpx.NewKeyed(time.Hour, o.burst),
+		AuthFailLimit: httpx.NewKeyed(time.Hour, o.authFailBurst),
+		Health:        &acmedns.HealthChecker{DB: pool, Provider: mem},
+		Log:           log,
 	}
 	return &fixture{t: t, h: h.Routes(), mem: mem, pool: pool}
 }
@@ -64,16 +74,51 @@ type req struct {
 
 func (f *fixture) do(r req) *httptest.ResponseRecorder {
 	f.t.Helper()
-	hr := httptest.NewRequest(r.method, r.path, strings.NewReader(r.body))
+	return f.serve(r.build(strings.NewReader(r.body)))
+}
+
+func (r req) build(body io.Reader) *http.Request {
+	hr := httptest.NewRequest(r.method, r.path, body)
 	if r.remote != "" {
 		hr.RemoteAddr = r.remote
 	}
 	for k, v := range r.headers {
 		hr.Header.Set(k, v)
 	}
+	return hr
+}
+
+func (f *fixture) serve(hr *http.Request) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
 	f.h.ServeHTTP(rec, hr)
 	return rec
+}
+
+// hookReader는 본문이 처음 읽힐 때 fn을 한 번 부른다. 핸들러는 인증한 뒤에 본문을 읽으므로
+// "인증은 끝났고 계정 행은 아직 잠그지 않은" 시점에 끼어들 수 있다.
+type hookReader struct {
+	r    io.Reader
+	fn   func()
+	once sync.Once
+}
+
+func (h *hookReader) Read(p []byte) (int, error) {
+	h.once.Do(h.fn)
+	return h.r.Read(p)
+}
+
+// auditActors는 action·detail이 같은 감사 로그 행의 actor를 돌려준다.
+func (f *fixture) auditActors(action, detail string) []string {
+	f.t.Helper()
+	rows, err := f.pool.Query(context.Background(), `SELECT actor FROM audit_logs WHERE action = $1 AND detail = $2 ORDER BY id`, action, detail)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	actors, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return actors
 }
 
 type registration struct {
@@ -324,3 +369,54 @@ func TestHealthCacheIgnoresCallerCancellation(t *testing.T) {
 type pingOK struct{}
 
 func (pingOK) Ping(context.Context) error { return nil }
+
+func TestUpdateAuthFailureLimitPerIP(t *testing.T) {
+	f := newFixture(t, fixtureOpts{authFailBurst: 3})
+	reg := f.register("a.com")
+	fenced := f.register("b.com", "10.9.0.0/16")
+	forbidden := map[string]string{"error": "forbidden"}
+	tooMany := map[string]string{"error": "too_many_attempts"}
+	from := func(r req, remote string) req { r.remote = remote; return r }
+	const attacker = "198.51.100.1:4000"
+
+	// 거부 사유 세 가지가 모두 같은 IP 예산을 쓴다.
+	wrongKey := updateReq(reg, txt('a'))
+	wrongKey.headers["X-Api-Key"] = "wrong"
+	mismatch := updateReq(reg, txt('a'))
+	mismatch.body = `{"subdomain":"` + fenced.Subdomain + `","txt":"` + txt('a') + `"}`
+	for _, r := range []req{wrongKey, mismatch, updateReq(fenced, txt('a'))} {
+		expect(t, f.do(from(r, attacker)), http.StatusUnauthorized, forbidden)
+	}
+	expect(t, f.do(from(wrongKey, attacker)), http.StatusTooManyRequests, tooMany)
+	// 막힌 IP는 올바른 키를 보내도 인증 전에 끊긴다.
+	expect(t, f.do(from(updateReq(reg, txt('a')), attacker)), http.StatusTooManyRequests, tooMany)
+
+	expect(t, f.do(from(wrongKey, "198.51.100.2:4000")), http.StatusUnauthorized, forbidden)
+	expect(t, f.do(from(updateReq(reg, txt('b')), "198.51.100.3:4000")), http.StatusOK, map[string]string{"txt": txt('b')})
+
+	// 429는 감사 로그를 남기지 않는다: 거부 4건(공격 IP 3건, 다른 IP 1건)만 남는다.
+	var n int
+	if err := f.pool.QueryRow(context.Background(), `SELECT count(*) FROM audit_logs WHERE action = 'update_denied'`).Scan(&n); err != nil || n != 4 {
+		t.Fatalf("update_denied rows = %d, %v", n, err)
+	}
+}
+
+// 인증과 행 잠금 사이에 계정이 폐기되면 500이 아니라 인증 실패와 같은 401이다.
+func TestUpdateAccountRevokedAfterAuthenticate(t *testing.T) {
+	f := newFixture(t, fixtureOpts{})
+	reg := f.register("a.com")
+	r := updateReq(reg, txt('a'))
+	revoke := func() {
+		if _, err := f.pool.Exec(context.Background(), `UPDATE acme_accounts SET revoked_at = now()`); err != nil {
+			t.Error(err)
+		}
+	}
+	rec := f.serve(r.build(&hookReader{r: strings.NewReader(r.body), fn: revoke}))
+	expect(t, rec, http.StatusUnauthorized, map[string]string{"error": "forbidden"})
+	if got := f.auditActors("update_denied", "invalid_credentials"); !slices.Equal(got, []string{"account:" + reg.Username}) {
+		t.Fatalf("update_denied actors = %v", got)
+	}
+	if n := len(f.auditActors("update_failed", "")); n != 0 || f.txtCount() != 0 || len(f.mem.Values(reg.FullDomain)) != 0 {
+		t.Fatal("revoked account was written or audited as failure")
+	}
+}

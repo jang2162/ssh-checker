@@ -18,6 +18,12 @@ import (
 const (
 	updateEvery = 6 * time.Second // 계정별 /update 토큰 보충 주기
 	updateBurst = 10
+
+	// /update 인증 실패는 IP별로 20번까지 받고, 그 뒤로는 3초에 1번만 받는다.
+	// 관리자 인증보다 느슨한 이유: NAT 뒤 여러 서버가 IP 하나를 함께 쓸 수 있고,
+	// compat 스위트도 한 IP에서 인증 실패를 7번 보낸다.
+	authFailEvery = 3 * time.Second
+	authFailBurst = 20
 )
 
 // Serve는 acme-dns 호환 API를 연다. SIGTERM을 받으면 진행 중인 요청을 마치고 끝낸다.
@@ -43,12 +49,13 @@ func Serve(ctx context.Context, args []string, getenv func(string) string) error
 
 	ip := httpx.ClientIP{Trusted: cfg.TrustedProxies}
 	h := &acmedns.Handler{
-		Svc:         &acmedns.Service{Store: store.New(pool), Provider: provider, Zone: cfg.ChallengeZone, TTL: cfg.TXTTTL},
-		IP:          ip,
-		Admin:       httpx.NewAdminAuth(cfg.AdminKey, ip),
-		UpdateLimit: httpx.NewKeyed(updateEvery, updateBurst),
-		Health:      &acmedns.HealthChecker{DB: pool, Provider: provider, CacheFor: time.Minute},
-		Log:         slog.Default(),
+		Svc:           &acmedns.Service{Store: store.New(pool), Provider: provider, Zone: cfg.ChallengeZone, TTL: cfg.TXTTTL},
+		IP:            ip,
+		Admin:         httpx.NewAdminAuth(cfg.AdminKey, ip),
+		UpdateLimit:   httpx.NewKeyed(updateEvery, updateBurst),
+		AuthFailLimit: httpx.NewKeyed(authFailEvery, authFailBurst),
+		Health:        &acmedns.HealthChecker{DB: pool, Provider: provider, CacheFor: time.Minute},
+		Log:           slog.Default(),
 	}
 	srv := &http.Server{
 		Addr:              *listen,

@@ -25,9 +25,11 @@ type Handler struct {
 	Svc         *Service
 	IP          httpx.ClientIP
 	Admin       *httpx.AdminAuth
-	UpdateLimit *httpx.Keyed
-	Health      *HealthChecker
-	Log         *slog.Logger
+	UpdateLimit *httpx.Keyed // 계정별 /update 빈도 제한
+	// AuthFailLimit는 /update 인증 거부를 IP별로 센다. 다 쓰면 bcrypt와 감사 로그 없이 429로 끊는다.
+	AuthFailLimit *httpx.Keyed
+	Health        *HealthChecker
+	Log           *slog.Logger
 }
 
 func (h *Handler) Routes() http.Handler {
@@ -48,11 +50,19 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	ip := h.IP.From(r)
 	user := truncate(r.Header.Get("X-Api-User"), maxActorLen)
+	// deny는 인증 거부(401)다. 거부할 때마다 IP별 실패 예산을 하나 쓴다.
 	deny := func(reason string) {
+		h.AuthFailLimit.Allow(ip.String())
 		h.audit(ctx, store.AuditEntry{Actor: "account:" + user, Action: "update_denied", SourceIP: ip.String(), Detail: reason})
 		httpx.WriteError(w, http.StatusUnauthorized, "forbidden")
 	}
 
+	// 실패 예산을 다 쓴 IP는 bcrypt 비교와 감사 로그 INSERT 없이 끊는다.
+	if h.AuthFailLimit.Exhausted(ip.String()) {
+		h.Log.Debug("update auth failures exhausted", "ip", ip.String())
+		httpx.WriteError(w, http.StatusTooManyRequests, "too_many_attempts")
+		return
+	}
 	acct, err := h.Svc.Authenticate(ctx, r.Header.Get("X-Api-User"), r.Header.Get("X-Api-Key"))
 	if errors.Is(err, ErrForbidden) {
 		deny("invalid_credentials")
@@ -74,17 +84,19 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		deny("subdomain_mismatch")
 		return
 	}
+	target := h.Svc.FQDN(acct.Subdomain)
+	actor := "account:" + acct.Username
 	if !h.UpdateLimit.Allow(acct.Username) {
 		httpx.WriteError(w, http.StatusTooManyRequests, "rate_limited")
 		return
 	}
 
-	target := h.Svc.FQDN(acct.Subdomain)
-	actor := "account:" + acct.Username
 	err = h.Svc.UpdateTXT(ctx, acct, req.TXT)
 	switch {
 	case errors.Is(err, ErrBadTXT):
 		httpx.WriteError(w, http.StatusBadRequest, "bad_txt")
+	case errors.Is(err, store.ErrNotFound):
+		deny("invalid_credentials") // 인증 뒤 행을 잠그기 전에 계정이 폐기됐다
 	case err != nil:
 		code, detail := "db_error", err.Error()
 		var perr *dnsprovider.Error
