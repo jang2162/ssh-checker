@@ -1,6 +1,8 @@
 package httpx_test
 
 import (
+	"bytes"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -62,6 +64,7 @@ func TestKeyed(t *testing.T) {
 func TestAdminAuth(t *testing.T) {
 	key := strings.Repeat("k", 32)
 	auth := httpx.NewAdminAuth(key, httpx.ClientIP{})
+	auth.Log = slog.New(slog.DiscardHandler)
 	h := auth.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) }))
 	call := func(remote, header string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest("POST", "/register", nil)
@@ -89,5 +92,31 @@ func TestAdminAuth(t *testing.T) {
 	}
 	if rec := call("192.0.2.2:1", "Bearer "+key); rec.Code != http.StatusNoContent {
 		t.Fatalf("other IP blocked: %d", rec.Code)
+	}
+}
+
+// 관리자 인증 실패와 잠금은 IP와 함께 로그에 남고, 보낸 토큰은 남지 않는다.
+func TestAdminAuthLogsFailures(t *testing.T) {
+	key := strings.Repeat("k", 32)
+	var buf bytes.Buffer
+	auth := httpx.NewAdminAuth(key, httpx.ClientIP{})
+	auth.Log = slog.New(slog.NewTextHandler(&buf, nil))
+	h := auth.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	const token = "presented-secret-token"
+	for range 6 {
+		r := httptest.NewRequest("POST", "/register", nil)
+		r.RemoteAddr = "192.0.2.9:1"
+		r.Header.Set("Authorization", "Bearer "+token)
+		h.ServeHTTP(httptest.NewRecorder(), r)
+	}
+	out := buf.String()
+	if n := strings.Count(out, `msg="admin auth failed" ip=192.0.2.9`); n != 5 {
+		t.Errorf("failed lines = %d, want 5:\n%s", n, out)
+	}
+	if n := strings.Count(out, `msg="admin auth locked out" ip=192.0.2.9`); n != 1 {
+		t.Errorf("locked out lines = %d, want 1:\n%s", n, out)
+	}
+	if strings.Contains(out, token) {
+		t.Errorf("token leaked into log:\n%s", out)
 	}
 }

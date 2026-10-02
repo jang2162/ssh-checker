@@ -55,6 +55,7 @@ func newFixture(t *testing.T, o fixtureOpts) *fixture {
 	ip := httpx.ClientIP{Trusted: o.trusted}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	admin := httpx.NewAdminAuth(adminKey, ip)
+	admin.Log = log
 	h := &acmedns.Handler{
 		Svc:           &acmedns.Service{Store: store.New(pool), Provider: mem, Zone: testZone, TTL: 60},
 		IP:            ip,
@@ -418,5 +419,36 @@ func TestUpdateAccountRevokedAfterAuthenticate(t *testing.T) {
 	}
 	if n := len(f.auditActors("update_failed", "")); n != 0 || f.txtCount() != 0 || len(f.mem.Values(reg.FullDomain)) != 0 {
 		t.Fatal("revoked account was written or audited as failure")
+	}
+}
+
+func TestUpdateDeniedAuditsBadTXTAndRateLimit(t *testing.T) {
+	f := newFixture(t, fixtureOpts{burst: 2})
+	reg := f.register("a.com")
+	actor := "account:" + reg.Username
+	expect(t, f.do(updateReq(reg, "short")), http.StatusBadRequest, map[string]string{"error": "bad_txt"})
+	if got := f.auditActors("update_denied", "bad_txt"); !slices.Equal(got, []string{actor}) {
+		t.Fatalf("bad_txt actors = %v", got)
+	}
+	expect(t, f.do(updateReq(reg, txt('a'))), http.StatusOK, map[string]string{"txt": txt('a')})
+	expect(t, f.do(updateReq(reg, txt('b'))), http.StatusTooManyRequests, map[string]string{"error": "rate_limited"})
+	if got := f.auditActors("update_denied", "rate_limited"); !slices.Equal(got, []string{actor}) {
+		t.Fatalf("rate_limited actors = %v", got)
+	}
+}
+
+// 클라이언트가 연결을 끊어 요청 ctx가 취소돼도 감사 로그는 남아야 한다.
+func TestUpdateAuditSurvivesClientDisconnect(t *testing.T) {
+	f := newFixture(t, fixtureOpts{})
+	reg := f.register("a.com")
+	other := f.register("b.com")
+	r := updateReq(reg, txt('a'))
+	r.body = `{"subdomain":"` + other.Subdomain + `","txt":"` + txt('a') + `"}`
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rec := f.serve(r.build(&hookReader{r: strings.NewReader(r.body), fn: cancel}).WithContext(ctx))
+	expect(t, rec, http.StatusUnauthorized, map[string]string{"error": "forbidden"})
+	if got := f.auditActors("update_denied", "subdomain_mismatch"); !slices.Equal(got, []string{"account:" + reg.Username}) {
+		t.Fatalf("subdomain_mismatch actors = %v", got)
 	}
 }

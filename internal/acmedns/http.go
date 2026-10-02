@@ -87,6 +87,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 	target := h.Svc.FQDN(acct.Subdomain)
 	actor := "account:" + acct.Username
 	if !h.UpdateLimit.Allow(acct.Username) {
+		h.audit(ctx, store.AuditEntry{Actor: actor, Action: "update_denied", Target: target, SourceIP: ip.String(), Detail: "rate_limited"})
 		httpx.WriteError(w, http.StatusTooManyRequests, "rate_limited")
 		return
 	}
@@ -94,6 +95,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 	err = h.Svc.UpdateTXT(ctx, acct, req.TXT)
 	switch {
 	case errors.Is(err, ErrBadTXT):
+		h.audit(ctx, store.AuditEntry{Actor: actor, Action: "update_denied", Target: target, SourceIP: ip.String(), Detail: "bad_txt"})
 		httpx.WriteError(w, http.StatusBadRequest, "bad_txt")
 	case errors.Is(err, store.ErrNotFound):
 		deny("invalid_credentials") // 인증 뒤 행을 잠그기 전에 계정이 폐기됐다
@@ -177,8 +179,9 @@ func (h *Handler) health(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, status, st)
 }
 
+// audit는 클라이언트가 연결을 끊어 요청 ctx가 취소돼도 기록되도록 취소를 떼어 낸 ctx로 쓴다.
 func (h *Handler) audit(ctx context.Context, e store.AuditEntry) {
-	if err := h.Svc.Store.Audit(ctx, e); err != nil {
+	if err := h.Svc.Store.Audit(context.WithoutCancel(ctx), e); err != nil {
 		h.Log.Error("audit", "action", e.Action, "err", err)
 	}
 }
