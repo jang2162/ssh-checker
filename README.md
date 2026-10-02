@@ -24,3 +24,8 @@ make db-up && make test && make db-down   # 단위·통합 테스트
 ## 배포
 
 `deploy/compose.yaml`을 Komodo git 기반 Stack으로 등록한다. 비밀값은 Environment에 `[[SSLCHK_ADMIN_KEY]]`처럼 보간으로만 넣는다. 변수 목록과 운영 절차는 설계 문서의 「배포」 절을 따른다. 첫 실서버 적용 전 `docs/runbooks/gate1-staging.md`의 스테이징 발급을 통과해야 한다.
+
+- `BIND_ADDR`, `IMAGE`, `APP_VERSION`, `POSTGRES_PASSWORD`, `DNS_PROVIDER`, `CHALLENGE_ZONE`, `ADMIN_KEY`는 필수다. 비어 있으면 compose가 배포를 거부한다.
+- `TRUSTED_PROXIES`에는 앞단 리버스 프록시 주소만 넣는다. 클라이언트 대역을 넣으면 `X-Forwarded-For`로 IP를 꾸며 allowfrom을 우회할 수 있다. 프록시가 없으면 비워 두고, 프록시 뒤인데 비워 두면 모든 클라이언트가 프록시 IP로 보여 allowfrom이 깨지고 관리자 인증 잠금도 함께 받는다.
+- rootless Docker나 userland proxy에서는 게시 포트의 출발지가 브리지 게이트웨이로 보일 수 있다. `/32` allowfrom을 넣기 전에 `audit_logs.source_ip`에 찍히는 클라이언트 IP를 확인한다.
+- `POSTGRES_PASSWORD`는 `DATABASE_URL`에 그대로 들어가므로 URL에 안전한 값을 쓴다(예: `openssl rand -hex 24`).

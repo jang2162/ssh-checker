@@ -3,33 +3,42 @@ name: ssl-checker
 # 비밀값(ADMIN_KEY, CF_API_TOKEN, POSTGRES_PASSWORD)은 Komodo Environment에서 [[이름]] 보간으로만 넣는다.
 # 이 파일과 env_file에 직접 쓰지 않는다.
 x-common-env: &common-env
-  DATABASE_URL: postgres://sslchk:${POSTGRES_PASSWORD}@db:5432/sslchk
-  DNS_PROVIDER: ${DNS_PROVIDER}
+  DATABASE_URL: postgres://sslchk:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/sslchk
+  DNS_PROVIDER: ${DNS_PROVIDER:?set DNS_PROVIDER}
   CF_API_TOKEN: ${CF_API_TOKEN:-}
   CF_ZONE_ID: ${CF_ZONE_ID:-}
-  CHALLENGE_ZONE: ${CHALLENGE_ZONE}
+  CHALLENGE_ZONE: ${CHALLENGE_ZONE:?set CHALLENGE_ZONE}
   TXT_TTL: ${TXT_TTL:-60}
 
 services:
   migrate:
-    image: ${IMAGE}:${APP_VERSION}
+    image: ${IMAGE:?set IMAGE}:${APP_VERSION:?set APP_VERSION}
     command: ["ssl-checker", "migrate"]
     environment:
-      DATABASE_URL: postgres://sslchk:${POSTGRES_PASSWORD}@db:5432/sslchk
+      DATABASE_URL: postgres://sslchk:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/sslchk
     depends_on:
       db:
         condition: service_healthy
     restart: "no"
 
+  # 네트워크 설정 주의:
+  # - TRUSTED_PROXIES에는 앞단 리버스 프록시 주소만 넣는다. 클라이언트 대역을 넣으면 그 클라이언트가
+  #   X-Forwarded-For로 자기 IP를 정할 수 있어 allowfrom을 우회한다.
+  # - 앞단 프록시가 없으면 비워 둔다. 프록시 뒤인데 비워 두면 모든 클라이언트가 프록시 IP로 보여
+  #   allowfrom이 의미가 없어지고, 관리자 인증 실패 잠금도 모든 클라이언트가 함께 받는다.
+  # - rootless Docker나 userland proxy를 쓰면 게시한 포트로 들어온 요청의 출발지가 브리지 게이트웨이로 보인다.
+  #   /32 allowfrom을 넣기 전에 audit_logs.source_ip에 실제로 찍히는 클라이언트 IP를 확인한다.
+  # - POSTGRES_PASSWORD는 DATABASE_URL에 그대로 들어가므로 URL에 안전한 문자만 쓴다(예: openssl rand -hex 24).
+  # - BIND_ADDR는 필수다. 비어 있으면 모든 인터페이스에 API가 열리므로 :?로 막는다.
   api:
-    image: ${IMAGE}:${APP_VERSION}
+    image: ${IMAGE:?set IMAGE}:${APP_VERSION:?set APP_VERSION}
     command: ["ssl-checker", "serve", "--listen", ":8080"]
     environment:
       <<: *common-env
-      ADMIN_KEY: ${ADMIN_KEY}
+      ADMIN_KEY: ${ADMIN_KEY:?set ADMIN_KEY}
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
     ports:
-      - "${BIND_ADDR}:${API_PORT:-8080}:8080"
+      - "${BIND_ADDR:?set BIND_ADDR}:${API_PORT:-8080}:8080"
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -42,7 +51,7 @@ services:
     restart: unless-stopped
 
   worker:
-    image: ${IMAGE}:${APP_VERSION}
+    image: ${IMAGE:?set IMAGE}:${APP_VERSION:?set APP_VERSION}
     command: ["ssl-checker", "worker"]
     environment:
       <<: *common-env
@@ -56,7 +65,7 @@ services:
     image: postgres:17
     environment:
       POSTGRES_USER: sslchk
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
       POSTGRES_DB: sslchk
     volumes:
       - pgdata:/var/lib/postgresql/data

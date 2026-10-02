@@ -11,7 +11,17 @@
 
 ## 절차
 
-1. 앱 배포: `DNS_PROVIDER=cloudflare`, `CHALLENGE_ZONE=<존>`, `CF_API_TOKEN=<토큰>`(필요하면 `CF_ZONE_ID`)으로 Stack을 배포한다. `curl http://<앱>:8080/health`가 `{"db":"ok","provider":"ok"}`인지 확인한다.
+1. 앱 배포: Komodo Stack Environment에 다음 변수를 넣고 배포한다. 비밀값은 `[[이름]]` 보간으로만 넣는다.
+   - `IMAGE`, `APP_VERSION`: 레지스트리의 이미지 이름과 태그.
+   - `BIND_ADDR`: 테스트 머신에서 닿는 앱 서버 주소. 비워 두면 compose가 배포를 거부한다.
+   - `ADMIN_KEY`: 32바이트 이상 무작위 값.
+   - `POSTGRES_PASSWORD`: `DATABASE_URL`에 그대로 들어가므로 URL에 안전한 값(예: `openssl rand -hex 24`).
+   - `DNS_PROVIDER=cloudflare`, `CHALLENGE_ZONE=<존>`, `CF_API_TOKEN=<토큰>`.
+   - `CF_ZONE_ID`: 존 단위 토큰은 존 목록 조회 권한이 없을 수 있으므로 항상 넣는 것을 권장한다.
+   - `TRUSTED_PROXIES`: 앞단 리버스 프록시 주소만 넣고, 프록시가 없으면 비워 둔다. 클라이언트 대역을 넣으면 `X-Forwarded-For`로 IP를 꾸며 allowfrom을 우회할 수 있다. 프록시 뒤인데 비워 두면 모든 클라이언트가 프록시 IP로 보여 allowfrom이 깨지고 관리자 인증 잠금도 함께 받는다.
+
+   배포 뒤 **테스트 머신에서** `curl http://<앱>:8080/health`가 `{"db":"ok","provider":"ok"}`인지 확인한다. 이것으로 `BIND_ADDR`와 테스트 머신에서의 접근, Cloudflare 토큰을 함께 검증한다. `provider`가 `ok`가 아니면 발급을 시작하지 않는다.
+   rootless Docker나 userland proxy 환경에서는 게시 포트로 들어온 요청의 출발지가 브리지 게이트웨이로 보일 수 있다. 다음 단계에서 `/32` allowfrom을 넣기 전에, 테스트 머신에서 보낸 요청이 `audit_logs.source_ip`에 어떤 IP로 남는지 확인한다(예: 일부러 틀린 키로 `/update`를 한 번 보내고 `update_denied` 행을 본다).
 2. 계정 등록 (ADMIN_KEY가 셸 히스토리에 남지 않게 입력으로 받는다):
    ```bash
    read -rs ADMIN_KEY    # 붙여넣고 Enter. 화면에 표시되지 않는다
@@ -45,13 +55,19 @@
 
 ## 정리
 
+아래 명령은 리눅스의 bash(GNU sed)를 기준으로 한다.
+
 ```bash
 ~/.acme.sh/acme.sh --remove -d test.a.com --ecc
-sed -i '/^SAVED_ACMEDNS_/d' ~/.acme.sh/account.conf   # acme.sh가 저장한 자격 증명 삭제
+# 현재 dns_acmedns는 ACMEDNS_* 자격 증명을 도메인별 설정(~/.acme.sh/test.a.com_ecc/test.a.com.conf)에 저장하고,
+# --remove는 이 디렉터리를 남긴다. 디렉터리째 지워 자격 증명을 없앤다.
+rm -rf ~/.acme.sh/test.a.com_ecc
 unset ACMEDNS_BASE_URL ACMEDNS_USERNAME ACMEDNS_PASSWORD ACMEDNS_SUBDOMAIN
 ```
 
-테스트 계정은 게이트가 끝나면 반드시 폐기한다. 폐기는 2단계의 관리 API(`DELETE /api/domains/{id}`)가 생기면 그것으로 한다. 그 전에는 `UPDATE acme_accounts SET revoked_at = now() WHERE subdomain = '<subdomain>'`로 폐기하고, 다음 worker 정리 때 TXT가 지워지는지 확인한다.
+옛 acme.sh는 자격 증명을 `account.conf`에 저장했다. 그런 버전이었다면 `sed -i '/^SAVED_ACMEDNS_/d' ~/.acme.sh/account.conf`도 실행한다.
+
+테스트 계정은 게이트가 끝나면 반드시 폐기한다. 폐기는 2단계의 관리 API(`DELETE /api/domains/{id}`)가 생기면 그것으로 한다. 그 전에는 `UPDATE acme_accounts SET revoked_at = now() WHERE subdomain = '<subdomain>'`로 폐기한다. 그다음 worker를 재시작해 정리를 바로 실행하고(worker는 시작할 때 한 번 정리한 뒤 24시간마다 돈다), Cloudflare 존에서 `<subdomain>.<존>` TXT가 사라졌는지 확인한다.
 
 ## 실패 시
 
