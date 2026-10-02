@@ -18,6 +18,7 @@ import (
 
 	"ssl-checker/internal/acmedns"
 	"ssl-checker/internal/db/dbtest"
+	"ssl-checker/internal/dnsprovider"
 	"ssl-checker/internal/dnsprovider/memory"
 	"ssl-checker/internal/httpx"
 	"ssl-checker/internal/store"
@@ -280,8 +281,8 @@ func TestUpdateRevokedAccount(t *testing.T) {
 func TestUpdateRateLimit(t *testing.T) {
 	f := newFixture(t, fixtureOpts{burst: 2})
 	reg := f.register("a.com")
-	f.do(updateReq(reg, txt('a')))
-	f.do(updateReq(reg, txt('b')))
+	expect(t, f.do(updateReq(reg, txt('a'))), http.StatusOK, map[string]string{"txt": txt('a')})
+	expect(t, f.do(updateReq(reg, txt('b'))), http.StatusOK, map[string]string{"txt": txt('b')})
 	expect(t, f.do(updateReq(reg, txt('c'))), http.StatusTooManyRequests, map[string]string{"error": "rate_limited"})
 }
 
@@ -291,3 +292,35 @@ func TestHealth(t *testing.T) {
 	f.mem.SetFailure(errors.New("down"))
 	expect(t, f.do(req{method: "GET", path: "/health"}), http.StatusServiceUnavailable, map[string]string{"db": "ok", "provider": "transient"})
 }
+
+func TestUpdateDeniedAuditsInvalidUTF8User(t *testing.T) {
+	f := newFixture(t, fixtureOpts{})
+	reg := f.register("a.com")
+	r := updateReq(reg, txt('a'))
+	r.headers["X-Api-User"] = "\xff\xfe" + strings.Repeat("\u00e9", 40)
+	expect(t, f.do(r), http.StatusUnauthorized, map[string]string{"error": "forbidden"})
+	var n int
+	if err := f.pool.QueryRow(context.Background(), `SELECT count(*) FROM audit_logs WHERE action = 'update_denied'`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("update_denied rows = %d, %v", n, err)
+	}
+}
+
+// ctx를 존중하는 공급자: 취소된 ctx로 부르면 에러를 돌려준다.
+type ctxProvider struct{ dnsprovider.Provider }
+
+func (ctxProvider) Check(ctx context.Context) error { return ctx.Err() }
+
+func TestHealthCacheIgnoresCallerCancellation(t *testing.T) {
+	h := &acmedns.HealthChecker{DB: pingOK{}, Provider: ctxProvider{}, CacheFor: time.Hour}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	h.Check(cancelled)
+	st, healthy := h.Check(context.Background())
+	if !healthy || st.Provider != "ok" {
+		t.Fatalf("cancelled caller poisoned cache: %+v healthy=%v", st, healthy)
+	}
+}
+
+type pingOK struct{}
+
+func (pingOK) Ping(context.Context) error { return nil }

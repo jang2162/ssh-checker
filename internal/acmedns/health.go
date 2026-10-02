@@ -8,6 +8,10 @@ import (
 	"ssl-checker/internal/dnsprovider"
 )
 
+// 공급자 확인은 호출한 /health 요청의 취소와 무관하게 자체 제한 시간을 둔다.
+// 요청이 먼저 끊겨도 context.Canceled가 캐시에 남아 정상 공급자가 한동안 transient로 보이는 일을 막는다.
+const providerCheckTimeout = 3 * time.Second
+
 type Pinger interface {
 	Ping(ctx context.Context) error
 }
@@ -49,7 +53,9 @@ func (h *HealthChecker) providerErr(ctx context.Context) error {
 	if !h.checked.IsZero() && time.Since(h.checked) < h.CacheFor {
 		return h.provErr
 	}
-	h.provErr = h.Provider.Check(ctx)
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), providerCheckTimeout)
+	defer cancel()
+	h.provErr = h.Provider.Check(cctx)
 	h.checked = time.Now()
 	return h.provErr
 }

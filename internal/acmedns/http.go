@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/netip"
 	"strings"
+	"unicode/utf8"
 
 	"ssl-checker/internal/dnsprovider"
 	"ssl-checker/internal/httpx"
@@ -62,6 +63,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, "db_error")
 		return
 	}
+	user = acct.Username // 인증 뒤에는 정규 값을 감사 로그 actor로 쓴다
 	if !allowed(acct.AllowFrom, ip) {
 		deny("ip_unauthorized")
 		return
@@ -181,9 +183,15 @@ func allowed(prefixes []netip.Prefix, ip netip.Addr) bool {
 	return false
 }
 
+// truncate는 잘못된 UTF-8을 "?"로 바꾸고 룬 경계에서 n바이트 이내로 자른다.
+// 감사 로그(Postgres text)에 그대로 넣어도 INSERT가 실패하지 않게 한다.
 func truncate(s string, n int) string {
-	if len(s) > n {
-		return s[:n]
+	s = strings.ToValidUTF8(s, "?")
+	if len(s) <= n {
+		return s
 	}
-	return s
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
 }
