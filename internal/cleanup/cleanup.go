@@ -51,6 +51,11 @@ func (c *Cleaner) Run(ctx context.Context) (Result, error) {
 
 	var errs []error
 	for _, label := range slices.Sorted(maps.Keys(have)) {
+		// 종료 신호 등으로 취소되면 남은 이름마다 같은 오류를 쌓지 않고 멈춘다.
+		if err := ctx.Err(); err != nil {
+			errs = append(errs, err)
+			break
+		}
 		fqdn := label + "." + c.Zone
 		acct, ok := active[label]
 		if ok && sameSet(have[label], acct.Values) {

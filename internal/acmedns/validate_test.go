@@ -27,7 +27,7 @@ func TestValidSubdomain(t *testing.T) {
 	if !acmedns.ValidSubdomain("8e5700ea-a4bf-41c7-8a77-e990661dcc6a") {
 		t.Error("valid uuid rejected")
 	}
-	for _, s := range []string{"", "www", "8E5700EA-A4BF-41C7-8A77-E990661DCC6A", "8e5700ea-a4bf-41c7-8a77-e990661dcc6", "8e5700ea.a4bf.41c7.8a77.e990661dcc6a"} {
+	for _, s := range []string{"", "www", "8E5700EA-A4BF-41C7-8A77-E990661DCC6A", "8e5700ea-a4bf-41c7-8a77-e990661dcc6", "8e5700ea.a4bf.41c7.8a77.e990661dcc6a", "gggggggg-gggg-gggg-gggg-gggggggggggg"} {
 		if acmedns.ValidSubdomain(s) {
 			t.Errorf("ValidSubdomain(%q) = true", s)
 		}

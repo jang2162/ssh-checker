@@ -6,7 +6,9 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -115,7 +117,7 @@ func TestCleanup(t *testing.T) {
 
 func TestCleanupLeavesNonUUIDNames(t *testing.T) {
 	e := newEnv(t)
-	for _, fqdn := range []string{zone, "www." + zone, "_dmarc." + zone, "8E5700EA-A4BF-41C7-8A77-E990661DCC6A-x." + zone} {
+	for _, fqdn := range []string{zone, "www." + zone, "_dmarc." + zone, "8E5700EA-A4BF-41C7-8A77-E990661DCC6A-x." + zone, "gggggggg-gggg-gggg-gggg-gggggggggggg" + "." + zone} {
 		if err := e.mem.SetTXT(e.ctx, fqdn, []string{"keep"}, 60); err != nil {
 			t.Fatal(err)
 		}
@@ -124,9 +126,81 @@ func TestCleanupLeavesNonUUIDNames(t *testing.T) {
 	if err != nil || res != (cleanup.Result{}) {
 		t.Fatalf("result = %+v, %v", res, err)
 	}
-	for _, fqdn := range []string{zone, "www." + zone, "_dmarc." + zone} {
+	for _, fqdn := range []string{zone, "www." + zone, "_dmarc." + zone, "gggggggg-gggg-gggg-gggg-gggggggggggg" + "." + zone} {
 		if got := e.mem.Values(fqdn); !slices.Equal(got, []string{"keep"}) {
 			t.Errorf("%s = %v; cleanup touched a non-challenge record", fqdn, got)
 		}
+	}
+}
+
+func TestCleanupStopsOnCancelledContext(t *testing.T) {
+	e := newEnv(t)
+	orphan := uuid.NewString()
+	if err := e.mem.SetTXT(e.ctx, orphan+"."+zone, []string{txt('o')}, 60); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(e.ctx)
+	cancel()
+	res, err := e.c.Run(ctx)
+	if err == nil {
+		t.Fatal("Run with cancelled context returned nil error")
+	}
+	if res != (cleanup.Result{}) {
+		t.Fatalf("result = %+v, want no changes", res)
+	}
+	if got := e.values(orphan); !slices.Equal(got, []string{txt('o')}) {
+		t.Fatalf("orphan = %v; cancelled run must not delete", got)
+	}
+}
+
+// 진행 중인 /update가 공급자에 쓴 값(아직 커밋 전)은 동시에 도는 정리가 지우면 안 된다.
+func TestCleanupWaitsForInFlightUpdate(t *testing.T) {
+	e := newEnv(t)
+	acct := e.account("inflight.com", nil, nil)
+	fqdn := acct.Subdomain + "." + zone
+	started, release := make(chan struct{}), make(chan struct{})
+	var wg sync.WaitGroup
+	var updErr error
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		updErr = e.st.UpdateTXT(e.ctx, acct.ID, func([]string) ([]string, error) {
+			if err := e.mem.SetTXT(e.ctx, fqdn, []string{txt('n')}, 60); err != nil {
+				return nil, err
+			}
+			close(started)
+			<-release
+			return []string{txt('n')}, nil
+		})
+	}()
+	<-started
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := e.c.Run(e.ctx)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("Run returned %v while /update held the row lock", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(release)
+	wg.Wait()
+	if updErr != nil {
+		t.Fatal(updErr)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := e.values(acct.Subdomain); !slices.Equal(got, []string{txt('n')}) {
+		t.Errorf("provider = %v, want the in-flight value kept", got)
+	}
+	var vals []string
+	if err := e.st.UpdateTXT(e.ctx, acct.ID, func(cur []string) ([]string, error) { vals = cur; return cur, nil }); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(vals, []string{txt('n')}) {
+		t.Errorf("db = %v, want committed value", vals)
 	}
 }
