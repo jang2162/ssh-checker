@@ -113,7 +113,7 @@ func (s *Store) UpdateTXT(ctx context.Context, accountID int64, fn func(current 
 		if err != nil {
 			return fmt.Errorf("store: lock account: %w", err)
 		}
-		rows, err := tx.Query(ctx, `SELECT value FROM txt_records WHERE account_id = $1 ORDER BY created_at, id`, accountID)
+		rows, err := tx.Query(ctx, `SELECT value FROM txt_records WHERE account_id = $1 ORDER BY id`, accountID)
 		if err != nil {
 			return fmt.Errorf("store: load txt: %w", err)
 		}
@@ -153,7 +153,7 @@ func (s *Store) ActiveTXTBySubdomain(ctx context.Context) (map[string]ActiveTXT,
 	rows, err := s.pool.Query(ctx, `SELECT a.id, a.subdomain::text, t.value
 		FROM acme_accounts a LEFT JOIN txt_records t ON t.account_id = a.id
 		WHERE a.revoked_at IS NULL
-		ORDER BY a.id, t.created_at, t.id`)
+		ORDER BY a.id, t.id`)
 	if err != nil {
 		return nil, fmt.Errorf("store: active txt: %w", err)
 	}

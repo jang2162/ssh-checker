@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -125,6 +126,41 @@ func TestUpdateTXT(t *testing.T) {
 	set(nil)
 	if got := current(); len(got) != 0 {
 		t.Fatalf("nil set should clear: %v", got)
+	}
+}
+
+func TestUpdateTXTOrderFollowsInsertNotTxStart(t *testing.T) {
+	st, pool := newStore(t)
+	ctx := context.Background()
+	a := create(t, st, "a.com")
+
+	// tx A의 now()는 시작 시점에 고정된다.
+	txA, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer txA.Rollback(ctx)
+	var started time.Time
+	if err := txA.QueryRow(ctx, `SELECT now()`).Scan(&started); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := st.UpdateTXT(ctx, a.ID, func([]string) ([]string, error) { return []string{"v1"}, nil }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := txA.Exec(ctx, `INSERT INTO txt_records (account_id, value) VALUES ($1, 'v2')`, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := txA.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	var got []string
+	if err := st.UpdateTXT(ctx, a.ID, func(cur []string) ([]string, error) { got = cur; return cur, nil }); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got, []string{"v1", "v2"}) {
+		t.Fatalf("order = %v, want [v1 v2] (insert order, not tx start)", got)
 	}
 }
 
