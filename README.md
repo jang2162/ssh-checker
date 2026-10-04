@@ -80,3 +80,7 @@ make db-up && make test && make db-down   # 단위·통합 테스트 (Postgres �
 ```
 
 DB가 필요한 테스트는 `TEST_DATABASE_URL`이 없으면 건너뜁니다. `make test`가 이 변수를 넣어 줍니다.
+
+## 라이선스
+
+[MIT](LICENSE)
