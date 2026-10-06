@@ -1,0 +1,49 @@
+# Komodo Stack 정의 (저장소 모드).
+# Komodo가 이 저장소를 clone해 deploy/에서 이미지를 빌드하고 compose로 배포한다. 레지스트리가 필요 없다.
+#
+# 쓰는 방법 (docs/guide/installation.md의 「Komodo로 배포」 참고):
+#   - UI로 만들 때: 아래 값을 Stack 설정 화면에 그대로 옮긴다.
+#   - Resource Sync로 만들 때: 이 파일을 resource_path로 지정한다.
+# 아래 <...>와 server 값은 환경에 맞게 바꾼다.
+
+[[stack]]
+name = "ssl-checker"
+description = "DNS-01 검증 대행 서버 (acme-dns 호환 API)"
+[stack.config]
+server = "<배포할 Komodo Server 이름>"
+
+# 저장소: Komodo가 매 배포마다 이 브랜치를 clone/pull 한다.
+git_provider = "gitlab.kbrainc.dev"
+repo = "util/ssh-checker"
+branch = "main"
+# 비공개 저장소면 Komodo에 등록한 Git 계정 이름을 넣는다.
+git_account = "<Komodo Git 계정>"
+
+# 저장소 안에서 compose를 실행할 디렉터리와 파일.
+# compose.build.yaml이 저장소 루트의 Dockerfile로 이미지를 빌드한다.
+run_directory = "deploy"
+file_paths = ["compose.yaml", "compose.build.yaml"]
+# 배포 전에 docker compose build를 실행한다.
+run_build = true
+
+# migrate는 마이그레이션 후 정상 종료하는 서비스라 상태 점검에서 뺀다.
+ignore_services = ["migrate"]
+
+# Komodo가 run_directory에 .env로 써서 --env-file로 넘긴다.
+# 비밀값은 [[이름]] 보간으로만 넣고, 실제 값은 Komodo Variables(시크릿)나 Periphery [secrets]에 둔다.
+# 변수 설명: docs/guide/configuration.md
+environment = """
+IMAGE=ssl-checker
+APP_VERSION=main
+BIND_ADDR=<api를 열 내부 IP>
+API_PORT=8080
+TRUSTED_PROXIES=
+DNS_PROVIDER=cloudflare
+CHALLENGE_ZONE=<챌린지 전용 존>
+CF_ZONE_ID=<Cloudflare Zone ID>
+TXT_TTL=60
+CHECK_INTERVAL=6h
+ADMIN_KEY=[[SSLCHK_ADMIN_KEY]]
+CF_API_TOKEN=[[SSLCHK_CF_API_TOKEN]]
+POSTGRES_PASSWORD=[[SSLCHK_POSTGRES_PASSWORD]]
+"""

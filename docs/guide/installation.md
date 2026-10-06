@@ -103,13 +103,55 @@ curl http://<BIND_ADDR>:<API_PORT>/health
 
 `provider`가 `ok`가 될 때까지는 도메인 연결을 시작하지 않습니다.
 
-## Komodo로 배포할 때
+## Komodo로 배포 (저장소 모드)
 
-`deploy/compose.yaml`을 git 기반 Stack으로 등록합니다. `deploy/.env` 대신 Stack의 **Environment**에 같은 변수를 넣습니다.
+Komodo Stack의 Git 저장소 모드를 쓰면 위의 3~5단계를 Komodo가 대신합니다. 배포할 때마다 이 저장소를 clone해 이미지를 빌드하고 compose로 띄우므로, 레지스트리와 서버 접속이 필요 없습니다. 설정 전체는 [`deploy/komodo/ssl-checker.toml`](../../deploy/komodo/ssl-checker.toml)에 있습니다.
 
-- 비밀값은 `ADMIN_KEY=[[SSLCHK_ADMIN_KEY]]`처럼 보간으로만 넣고, 실제 값은 배포 서버의 Periphery 설정 `[secrets]`나 시크릿 옵션을 켠 Komodo Variables에 둡니다.
-- `migrate`는 정상 종료되는 서비스이므로 상태 점검 제외 서비스에 넣습니다.
-- Build 리소스로 이 저장소의 `Dockerfile`을 빌드해 레지스트리에 푸시하고, `APP_VERSION`을 그 태그로 맞춥니다.
+### 1. 비밀값 등록
+
+Komodo **Settings → Variables**에서 아래 세 값을 만들고 **Secret**을 켭니다. Secret을 켜면 로그에 값이 가려지고 관리자가 아닌 사용자는 볼 수 없습니다.
+
+| 이름 | 값 |
+| --- | --- |
+| `SSLCHK_ADMIN_KEY` | `openssl rand -hex 32` |
+| `SSLCHK_CF_API_TOKEN` | Cloudflare 토큰 |
+| `SSLCHK_POSTGRES_PASSWORD` | `openssl rand -hex 24` |
+
+비밀값을 Komodo Core에 두고 싶지 않다면 배포 서버의 Periphery 설정 파일 `[secrets]`에 같은 이름으로 넣어도 됩니다. Periphery 시크릿은 Core를 거쳐 전송되지 않습니다.
+
+### 2. Stack 만들기
+
+UI에서 **Stacks → New Stack**을 누르고 모드를 **Git Repo**로 고른 뒤 아래처럼 채웁니다.
+
+| 항목 | 값 |
+| --- | --- |
+| Server | 배포할 서버 |
+| Git Provider / Repo / Branch | `gitlab.kbrainc.dev` / `util/ssh-checker` / `main` (포크했다면 그 저장소) |
+| Git Account | 비공개 저장소면 Komodo에 등록한 Git 계정 |
+| Run Directory | `deploy` |
+| File Paths | `compose.yaml`, `compose.build.yaml` |
+| Run Build | 켬 (배포 전에 `docker compose build` 실행) |
+| Ignore Services | `migrate` (정상 종료하는 서비스라 상태 점검에서 제외) |
+| Environment | `deploy/komodo/ssl-checker.toml`의 `environment` 블록. `<...>` 값을 채웁니다. |
+
+Environment에서 비밀값은 반드시 `ADMIN_KEY=[[SSLCHK_ADMIN_KEY]]`처럼 보간으로만 넣습니다. Komodo는 이 내용을 `deploy/.env`로 써서 `--env-file`로 넘깁니다.
+
+Resource Sync를 쓴다면 UI 입력 대신 `deploy/komodo/ssl-checker.toml`을 sync의 `resource_path`에 넣고, `<...>` 값은 그 파일을 복사한 사본에서 채웁니다.
+
+### 3. 배포와 확인
+
+Stack 화면에서 **Deploy**를 누릅니다. Komodo가 저장소를 받아 이미지를 빌드하고 `migrate` → `api`·`worker` 순으로 띄웁니다. 서비스 상태가 `api` healthy, `worker` running이 되면 위의 [6. 첫 기동 확인](#6-첫-기동-확인)을 합니다.
+
+### 업데이트
+
+`main`에 새 커밋이 올라오면 Stack에서 **Deploy**를 다시 누릅니다. 최신 커밋을 받아 다시 빌드하고 컨테이너를 교체합니다. 푸시할 때마다 자동으로 배포하려면, Stack 설정의 **Webhook URL**을 복사해 GitLab 프로젝트 **Settings → Webhooks**에 Push events로 등록합니다.
+
+### 레지스트리 이미지로 배포하려면
+
+여러 서버에 같은 이미지를 배포하거나 버전을 고정하려면 Komodo **Build** 리소스로 이 저장소의 `Dockerfile`을 빌드해 레지스트리에 푸시합니다. 그다음 Stack은 이렇게 설정합니다.
+- **File Paths**는 `compose.yaml` 하나만 둡니다.
+- **Run Build**는 끕니다.
+- `IMAGE`와 `APP_VERSION`을 레지스트리 경로와 태그로 바꿉니다.
 
 ## 다음 단계
 
