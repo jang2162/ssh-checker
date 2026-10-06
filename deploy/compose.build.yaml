@@ -1,6 +1,7 @@
 # 레지스트리 없이 저장소에서 바로 이미지를 빌드할 때 compose.yaml에 덧붙이는 파일.
 #   docker compose -f compose.yaml -f compose.build.yaml --env-file .env up -d --build
-# Komodo Stack 저장소 모드에서는 file_paths에 두 파일을 함께 넣고 run_build를 켠다.
+# Komodo Stack 저장소 모드에서는 File Paths에 두 파일을 함께 넣는다.
+# pull_policy: build라서 Komodo의 "Pre Build Images"를 켜지 않아도 Deploy할 때 빌드된다.
 #
 # 빌드는 migrate 서비스 하나에만 둔다. api와 worker는 같은 ${IMAGE}:${APP_VERSION} 태그를 쓰므로,
 # 이미지를 한 번만 빌드하고 세 서비스가 함께 쓴다.

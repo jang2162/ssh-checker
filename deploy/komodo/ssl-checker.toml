@@ -23,7 +23,8 @@ git_account = "<Komodo Git 계정>"
 # compose.build.yaml이 저장소 루트의 Dockerfile로 이미지를 빌드한다.
 run_directory = "deploy"
 file_paths = ["compose.yaml", "compose.build.yaml"]
-# 배포 전에 docker compose build를 실행한다.
+# 배포 전에 docker compose build를 실행한다. UI 이름은 Build Images → "Pre Build Images".
+# 꺼도 compose.build.yaml의 pull_policy: build 때문에 Deploy할 때 빌드된다.
 run_build = true
 
 # migrate는 마이그레이션 후 정상 종료하는 서비스라 상태 점검에서 뺀다.

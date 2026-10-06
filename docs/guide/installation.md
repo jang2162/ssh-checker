@@ -121,17 +121,18 @@ Komodo **Settings → Variables**에서 아래 세 값을 만들고 **Secret**�
 
 ### 2. Stack 만들기
 
-UI에서 **Stacks → New Stack**을 누르고 모드를 **Git Repo**로 고른 뒤 아래처럼 채웁니다.
+UI에서 **Stacks → New Stack**을 누르고 아래처럼 채웁니다. 항목 이름은 Komodo v2.3 UI 기준입니다.
 
-| 항목 | 값 |
+| UI 항목 | 값 |
 | --- | --- |
 | Server | 배포할 서버 |
-| Git Provider / Repo / Branch | `gitlab.kbrainc.dev` / `util/ssh-checker` / `main` (포크했다면 그 저장소) |
-| Git Account | 비공개 저장소면 Komodo에 등록한 Git 계정 |
-| Run Directory | `deploy` |
-| File Paths | `compose.yaml`, `compose.build.yaml` |
-| Run Build | 켬 (배포 전에 `docker compose build` 실행) |
+| Choose Mode | **Git Repo**. "Files On Server"를 고르면 저장소를 받지 않아 `compose.yaml`을 찾지 못합니다. |
+| Source: Git Provider / Repo / Branch | `gitlab.kbrainc.dev` / `util/ssh-checker` / `main` (포크했다면 그 저장소) |
+| Source: Git Account | 비공개 저장소면 Komodo에 등록한 Git 계정 |
+| Files: Run Directory | `deploy` (비우면 저장소 루트에서 찾아 실패합니다) |
+| Files: File Paths | `compose.yaml`, `compose.build.yaml` 두 줄 (비우면 `compose.yaml` 하나만 써서 이미지를 빌드하지 않습니다) |
 | Ignore Services | `migrate` (정상 종료하는 서비스라 상태 점검에서 제외) |
+| Build Images: Pre Build Images | 선택. 꺼도 `compose.build.yaml`의 `pull_policy: build` 때문에 Deploy할 때 이미지를 빌드합니다. 켜면 Deploy 전에 `docker compose build`를 먼저 실행합니다. Swarm Stack에서는 보이지 않습니다. |
 | Environment | `deploy/komodo/ssl-checker.toml`의 `environment` 블록. `<...>` 값을 채웁니다. |
 
 Environment에서 비밀값은 반드시 `ADMIN_KEY=[[SSLCHK_ADMIN_KEY]]`처럼 보간으로만 넣습니다. Komodo는 이 내용을 `deploy/.env`로 써서 `--env-file`로 넘깁니다.
