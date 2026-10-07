@@ -139,3 +139,27 @@ func TestDNSResolver(t *testing.T) {
 		}
 	}
 }
+
+func TestPublicURL(t *testing.T) {
+	cases := map[string]string{
+		"":                                 "",
+		"https://ssl-checker.example.com":  "https://ssl-checker.example.com",
+		"https://ssl-checker.example.com/": "https://ssl-checker.example.com",
+		"http://10.0.0.5:8080":             "http://10.0.0.5:8080",
+	}
+	for in, want := range cases {
+		m := apiEnv()
+		m["PUBLIC_URL"] = in
+		cfg, err := config.Load(config.RoleAPI, env(m))
+		if err != nil || cfg.PublicURL != want {
+			t.Errorf("PUBLIC_URL=%q = %q, %v; want %q", in, cfg.PublicURL, err, want)
+		}
+	}
+	for _, bad := range []string{"ssl-checker.example.com", "ftp://x.com", "https://x.com/app", "https://x.com?a=1", "https://"} {
+		m := apiEnv()
+		m["PUBLIC_URL"] = bad
+		if _, err := config.Load(config.RoleAPI, env(m)); err == nil || !strings.Contains(err.Error(), "PUBLIC_URL") {
+			t.Errorf("PUBLIC_URL=%q err = %v", bad, err)
+		}
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"ssl-checker/internal/acmedns"
+	"ssl-checker/internal/adminapi"
 	"ssl-checker/internal/config"
 	"ssl-checker/internal/db"
 	"ssl-checker/internal/httpx"
@@ -48,8 +49,9 @@ func Serve(ctx context.Context, args []string, getenv func(string) string) error
 	}
 
 	ip := httpx.ClientIP{Trusted: cfg.TrustedProxies}
+	st := store.New(pool)
 	h := &acmedns.Handler{
-		Svc:           &acmedns.Service{Store: store.New(pool), Provider: provider, Zone: cfg.ChallengeZone, TTL: cfg.TXTTTL},
+		Svc:           &acmedns.Service{Store: st, Provider: provider, Zone: cfg.ChallengeZone, TTL: cfg.TXTTTL},
 		IP:            ip,
 		Admin:         httpx.NewAdminAuth(cfg.AdminKey, ip),
 		UpdateLimit:   httpx.NewKeyed(updateEvery, updateBurst),
@@ -57,9 +59,19 @@ func Serve(ctx context.Context, args []string, getenv func(string) string) error
 		Health:        &acmedns.HealthChecker{DB: pool, Provider: provider, CacheFor: time.Minute},
 		Log:           slog.Default(),
 	}
+	api := &adminapi.API{Store: st, Zone: cfg.ChallengeZone, CheckInterval: cfg.CheckInterval, PublicURL: cfg.PublicURL, IP: ip, Log: slog.Default()}
+
+	// acme-dns 경로는 기존 핸들러에 그대로 넘기고, /api는 같은 mux에 붙인다.
+	mux := http.NewServeMux()
+	legacy := h.Routes()
+	mux.Handle("POST /update", legacy)
+	mux.Handle("POST /register", legacy)
+	mux.Handle("GET /health", legacy)
+	api.Register(mux)
+
 	srv := &http.Server{
 		Addr:              *listen,
-		Handler:           h.Routes(),
+		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      30 * time.Second,

@@ -120,3 +120,19 @@ func TestAdminAuthLogsFailures(t *testing.T) {
 		t.Errorf("token leaked into log:\n%s", out)
 	}
 }
+
+func TestProxied(t *testing.T) {
+	c := httpx.ClientIP{Trusted: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}}
+	r := httptest.NewRequest("GET", "/", nil)
+	r.RemoteAddr = "10.1.2.3:5000"
+	if !c.Proxied(r) {
+		t.Error("trusted peer not proxied")
+	}
+	r.RemoteAddr = "192.0.2.1:5000"
+	if c.Proxied(r) {
+		t.Error("untrusted peer proxied")
+	}
+	if (httpx.ClientIP{}).Proxied(r) {
+		t.Error("no trusted proxies but proxied")
+	}
+}

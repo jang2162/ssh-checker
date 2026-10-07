@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -41,6 +42,7 @@ type Config struct {
 	AdminKey       string
 	TrustedProxies []netip.Prefix
 	CheckInterval  time.Duration
+	PublicURL      string
 	DNSResolver    string
 }
 
@@ -108,6 +110,11 @@ func Load(role Role, getenv func(string) string) (Config, error) {
 			errs = append(errs, fmt.Errorf("TRUSTED_PROXIES: %w", err))
 		}
 		c.TrustedProxies = proxies
+		publicURL, err := parsePublicURL(getenv("PUBLIC_URL"))
+		if err != nil {
+			errs = append(errs, fmt.Errorf("PUBLIC_URL: %w", err))
+		}
+		c.PublicURL = publicURL
 	}
 	return c, errors.Join(errs...)
 }
@@ -130,4 +137,18 @@ func parseResolver(s string) (string, error) {
 		return "", fmt.Errorf("port must be 1..65535, got %q", s)
 	}
 	return s, nil
+}
+
+// parsePublicURL은 외부에서 api에 닿는 주소를 scheme://host[:port]로 정규화한다. 경로는 받지 않는다.
+func parsePublicURL(s string) (string, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "", nil
+	}
+	u, err := url.Parse(s)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" ||
+		(u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+		return "", fmt.Errorf("want http(s)://host[:port], got %q", s)
+	}
+	return u.Scheme + "://" + u.Host, nil
 }

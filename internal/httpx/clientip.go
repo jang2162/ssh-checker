@@ -35,6 +35,12 @@ func (c ClientIP) From(r *http.Request) netip.Addr {
 	return addr
 }
 
+// Proxied는 요청이 신뢰하는 프록시에서 직접 왔는지 알려 준다. 그때만 X-Forwarded-* 헤더를 믿는다.
+func (c ClientIP) Proxied(r *http.Request) bool {
+	a := parseRemote(r.RemoteAddr)
+	return a.IsValid() && c.trusted(a)
+}
+
 func (c ClientIP) trusted(a netip.Addr) bool {
 	for _, p := range c.Trusted {
 		if p.Contains(a) {
