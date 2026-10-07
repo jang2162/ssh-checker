@@ -46,6 +46,20 @@ export function isStale(lastCheckedAt: string | null, checkIntervalMs: number | 
   return Number.isFinite(t) && now - t > STALE_FACTOR * checkIntervalMs;
 }
 
+/** 점검 결과 중 가장 최근의 checked_at. 비었거나 모두 해석할 수 없으면 null. */
+export function latestCheckedAt(results: readonly { checked_at: string }[]): string | null {
+  let best: string | null = null;
+  let bestT = -Infinity;
+  for (const r of results) {
+    const t = Date.parse(r.checked_at);
+    if (Number.isFinite(t) && t > bestT) {
+      bestT = t;
+      best = r.checked_at;
+    }
+  }
+  return best;
+}
+
 /**
  * 대시보드 정렬: 나쁜 상태가 먼저, 같은 상태에서는 만료가 가까운 것이 먼저, 그다음 도메인 이름순.
  * 만료일이 없는(인증서를 못 받은) 도메인은 같은 상태 안에서 뒤로 간다.

@@ -26,10 +26,15 @@ func TestRenderFillsServerValues(t *testing.T) {
 		"curl -sS -X POST https://ssl.example.com/api/domains ",
 		"_acme-challenge.a.com.  CNAME  <uuid>.acme.example.com.",
 		`export ACMEDNS_BASE_URL="https://ssl.example.com"`,
+		`export ACMEDNS_PASSWORD="<password>"`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q", want)
 		}
+	}
+	// read는 TTY가 없는 에이전트 셸에서 실패하므로 주 안내 줄이 아니다(대화형 대안은 설명에만 나온다).
+	if strings.Contains(out, "\nread -rs ACMEDNS_PASSWORD && export") {
+		t.Error("read -rs must not be the primary instruction line")
 	}
 	if strings.Contains(out, "{{") || strings.Contains(out, "<ssl-checker 주소>") {
 		t.Errorf("unfilled template: %q", out)

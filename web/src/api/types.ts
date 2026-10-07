@@ -47,7 +47,7 @@ export interface CheckResult {
   tls_version: string;
   cipher: string;
   subject_cn: string;
-  sans: string[];
+  sans: string[] | null; // 접속에 실패한 즉시 점검 응답에는 null이 올 수 있다
   issuer: string;
   serial: string;
   not_before?: string;

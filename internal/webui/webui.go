@@ -17,7 +17,7 @@ import (
 var embedded embed.FS
 
 // csp는 화면이 같은 출처의 스크립트·스타일만 쓰게 하고, 다른 사이트가 화면을 iframe으로 감싸지 못하게 한다.
-const csp = "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+const csp = "default-src 'self'; style-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
 
 const placeholder = `<!doctype html>
 <html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">

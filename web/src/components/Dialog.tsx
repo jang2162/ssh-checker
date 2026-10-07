@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useId, useRef, type ReactNode } from "react";
 
 interface Props {
   title: string;
@@ -17,6 +17,7 @@ interface Props {
 /** 브라우저 <dialog>를 모달로 연다. 포커스 가둠과 Esc 처리는 브라우저가 한다. */
 export function Dialog({ title, onClose, children, wide, persistent }: Props) {
   const ref = useRef<HTMLDialogElement>(null);
+  const titleId = useId();
   useEffect(() => {
     const d = ref.current;
     if (d && !d.open) d.showModal();
@@ -25,7 +26,7 @@ export function Dialog({ title, onClose, children, wide, persistent }: Props) {
     <dialog
       ref={ref}
       className={wide ? "dialog wide" : "dialog"}
-      aria-labelledby="dialog-title"
+      aria-labelledby={titleId}
       onClose={() => {
         if (persistent) {
           // 브라우저가 cancel을 막지 못하고 닫았으면(Chromium의 연속 Esc) 다시 연다.
@@ -37,7 +38,7 @@ export function Dialog({ title, onClose, children, wide, persistent }: Props) {
       }}
       onCancel={persistent ? (e) => e.preventDefault() : undefined}
     >
-      <h2 id="dialog-title">{title}</h2>
+      <h2 id={titleId}>{title}</h2>
       {children}
     </dialog>
   );

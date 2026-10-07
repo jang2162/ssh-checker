@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Status } from "../api/types.ts";
-import { isStale, parseGoDuration, parseStatus, sortByUrgency, STATUS_LABEL, STATUS_ORDER } from "./status.ts";
+import { isStale, latestCheckedAt, parseGoDuration, parseStatus, sortByUrgency, STATUS_LABEL, STATUS_ORDER } from "./status.ts";
 
 test("parseGoDuration reads Go duration strings", () => {
   assert.equal(parseGoDuration("6h0m0s"), 6 * 3600_000);
@@ -64,4 +64,15 @@ test("sortByUrgency does not change its input", () => {
   ];
   sortByUrgency(input);
   assert.equal(input[0]?.fqdn, "b");
+});
+
+test("latestCheckedAt picks the newest valid time", () => {
+  assert.equal(latestCheckedAt([]), null);
+  assert.equal(latestCheckedAt([{ checked_at: "2026-01-01T00:00:00Z" }]), "2026-01-01T00:00:00Z");
+  assert.equal(
+    latestCheckedAt([{ checked_at: "2026-01-01T00:00:00Z" }, { checked_at: "2026-03-01T00:00:00Z" }, { checked_at: "2026-02-01T00:00:00Z" }]),
+    "2026-03-01T00:00:00Z",
+  );
+  assert.equal(latestCheckedAt([{ checked_at: "garbage" }, { checked_at: "2026-02-01T00:00:00Z" }]), "2026-02-01T00:00:00Z");
+  assert.equal(latestCheckedAt([{ checked_at: "garbage" }]), null);
 });

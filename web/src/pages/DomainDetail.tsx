@@ -11,13 +11,14 @@ import { TargetCard } from "../components/TargetCard.tsx";
 import { ConfirmDialog } from "../dialogs/ConfirmDialog.tsx";
 import { MemoDialog } from "../dialogs/MemoDialog.tsx";
 import { TargetDialog } from "../dialogs/TargetDialog.tsx";
+import { isStale, latestCheckedAt } from "../lib/status.ts";
 import { NotFound } from "./NotFound.tsx";
 
 export function DomainDetail() {
   const params = useParams();
   const id = Number(params.id);
   const valid = Number.isInteger(id) && id > 0;
-  const { admin } = useApp();
+  const { admin, checkIntervalMs } = useApp();
   const navigate = useNavigate();
   const [dialog, setDialog] = useState<"memo" | "target" | "delete" | null>(null);
 
@@ -36,6 +37,8 @@ export function DomainDetail() {
   }
 
   const now = Date.now();
+  const newest = latestCheckedAt(data.targets.flatMap((t) => t.results));
+  const stale = isStale(newest, checkIntervalMs, now);
   const onChanged = () => void reload();
   return (
     <>
@@ -58,6 +61,11 @@ export function DomainDetail() {
       </div>
 
       {error && <Notice kind="error">새로 고치지 못했습니다: {error}</Notice>}
+      {stale && (
+        <Notice kind="warning">
+          이 도메인의 점검 결과가 오래됐습니다(점검 주기의 2배 넘게 지남). 상태는 점검할 때 저장되므로 worker가 멈췄다면 위 상태도 최신이 아닐 수 있습니다.
+        </Notice>
+      )}
       <ReasonList reasons={data.reasons} />
 
       <div className="section-head">
