@@ -111,7 +111,7 @@ func (a *API) acmeView(fqdn string, st *store.ACMEState) any {
 	}
 	return acmeDetail{
 		Enabled: true, Username: st.Username, Subdomain: st.Subdomain, FullDomain: full,
-		CNAMERecord: cnamecheck.ChallengeName(fqdn) + ". CNAME " + full + ".",
+		CNAMERecord: cnameRecord(fqdn, full),
 		AllowFrom:   allow, CNAMEStatus: st.CNAMEStatus, CNAMEValue: st.CNAMEValue, CNAMECheckedAt: st.CNAMECheckedAt,
 		LastUpdateAt: st.LastUpdateAt, LastFailureAt: st.LastFailureAt, ConsecutiveFailures: st.ConsecutiveFailures,
 	}
@@ -135,4 +135,9 @@ func targetViews(targets []store.Target, latest map[int64][]monitor.Result, per 
 
 func singleTargetView(t store.Target, rs []monitor.Result) targetView {
 	return targetViews([]store.Target{t}, map[int64][]monitor.Result{t.ID: rs}, []monitor.Assessment{monitor.AssessTarget(rs)})[0]
+}
+
+// cnameRecord는 도메인 DNS에 걸어야 하는 레코드 한 줄이다.
+func cnameRecord(fqdn, fullDomain string) string {
+	return cnamecheck.ChallengeName(fqdn) + ". CNAME " + fullDomain + "."
 }

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"ssl-checker/internal/acmedns"
+	"ssl-checker/internal/cnamecheck"
 	"ssl-checker/internal/dnsprovider"
 	"ssl-checker/internal/httpx"
 	"ssl-checker/internal/monitor"
@@ -32,9 +33,10 @@ type API struct {
 	IP            httpx.ClientIP
 	Now           func() time.Time
 	Log           *slog.Logger
-	Auth          *Auth            // 관리자 확인
-	Svc           *acmedns.Service // ACME 켜기·재발급·끄기
-	Runner        *monitor.Runner  // "지금 점검"과 대상 추가·수정 직후 점검
+	Auth          *Auth               // 관리자 확인
+	Svc           *acmedns.Service    // ACME 켜기·재발급·끄기
+	Runner        *monitor.Runner     // "지금 점검"과 대상 추가·수정 직후 점검
+	CNAME         *cnamecheck.Checker // ACME CNAME "지금 확인"
 }
 
 type route struct {
@@ -61,6 +63,11 @@ func (a *API) routes() []route {
 		{"PATCH", "/api/targets/{id}", a.write(a.patchTarget)},
 		{"DELETE", "/api/targets/{id}", a.write(a.deleteTarget)},
 		{"POST", "/api/targets/{id}/check", a.write(a.checkTarget)},
+		{"POST", "/api/domains/{id}/acme", a.write(a.enableACME)},
+		{"PATCH", "/api/domains/{id}/acme", a.write(a.patchACME)},
+		{"DELETE", "/api/domains/{id}/acme", a.write(a.disableACME)},
+		{"POST", "/api/domains/{id}/acme/rotate", a.write(a.rotateACME)},
+		{"POST", "/api/domains/{id}/acme/check", a.write(a.checkACME)},
 	}
 }
 

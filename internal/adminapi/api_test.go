@@ -50,6 +50,7 @@ func newFixture(t *testing.T) *fixture {
 		Store: st, Svc: svc, Zone: "acme.test", CheckInterval: 6 * time.Hour,
 		Runner: &monitor.Runner{Prober: &monitor.Prober{Timeout: 300 * time.Millisecond}, Sink: st, Log: log},
 		Auth:   adminapi.NewAuth(adminKey),
+		CNAME:  &cnamecheck.Checker{Resolver: "127.0.0.1:1", Timeout: 200 * time.Millisecond},
 		IP:     httpx.ClientIP{Trusted: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}},
 		Now:    func() time.Time { return now }, Log: log,
 	}
