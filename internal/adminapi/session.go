@@ -16,13 +16,14 @@ type loginRequest struct {
 
 func (a *API) login(w http.ResponseWriter, r *http.Request) {
 	ip := a.IP.From(r).String()
-	if a.Auth.failures.Exhausted(ip) {
-		httpx.WriteError(w, http.StatusTooManyRequests, "too_many_attempts")
-		return
-	}
 	var req loginRequest
 	if err := decode(r, &req); err != nil {
 		httpx.WriteError(w, http.StatusBadRequest, "malformed_json")
+		return
+	}
+	// 본문을 다 읽은 뒤에 한도를 본다. 느린 본문으로 검사를 먼저 통과해 두는 병렬 요청을 막는다.
+	if a.Auth.failures.Exhausted(ip) {
+		httpx.WriteError(w, http.StatusTooManyRequests, "too_many_attempts")
 		return
 	}
 	if !a.Auth.keyMatches(req.Key) {
@@ -37,8 +38,10 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, map[string]bool{"admin": true})
 }
 
+// sessionStatus는 화면이 쿠키 로그인 여부만 확인하는 용도다. Bearer 키는 보지 않는다(실패를 세지 않으므로 키 추측 수단이 되면 안 된다).
 func (a *API) sessionStatus(w http.ResponseWriter, r *http.Request) {
-	ok, _ := a.Auth.check(r)
+	c, err := r.Cookie(session.CookieName)
+	ok := err == nil && a.Auth.Sessions.Valid(c.Value)
 	httpx.WriteJSON(w, http.StatusOK, map[string]bool{"admin": ok})
 }
 

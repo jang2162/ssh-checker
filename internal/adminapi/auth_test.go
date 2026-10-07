@@ -133,6 +133,23 @@ func TestAuditListing(t *testing.T) {
 	expectError(t, f.admin("GET", "/api/audit?before_id=x", ""), http.StatusBadRequest, "invalid_before_id")
 }
 
+// GET /api/session은 Bearer를 보지 않는다: 키 추측 수단이 되지 않고 실패 횟수도 세지 않는다.
+func TestSessionStatusIgnoresBearer(t *testing.T) {
+	f := newFixture(t)
+	for range 6 {
+		rec := f.do(call{method: "GET", path: "/api/session", headers: map[string]string{"Authorization": "Bearer wrong"}})
+		if got := decodeBody[map[string]bool](t, rec); got["admin"] {
+			t.Fatal("wrong bearer reported as admin")
+		}
+	}
+	if rec := f.do(call{method: "GET", path: "/api/audit", bearer: true}); rec.Code != http.StatusOK {
+		t.Fatalf("audit after status probes = %d", rec.Code)
+	}
+	if got := decodeBody[map[string]bool](t, f.do(call{method: "GET", path: "/api/session", bearer: true})); got["admin"] {
+		t.Fatal("bearer without cookie reported as admin")
+	}
+}
+
 // 형식이 이상한 Host/X-Forwarded-Host는 공개 주소에 쓰지 않는다.
 func TestPublicURLRejectsOddHosts(t *testing.T) {
 	f := newFixture(t)
