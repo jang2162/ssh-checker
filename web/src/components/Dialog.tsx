@@ -6,7 +6,11 @@ interface Props {
   onClose: () => void;
   children: ReactNode;
   wide?: boolean;
-  /** true면 Esc로 닫히지 않는다. 한 번만 보여 주는 정보를 담은 창에 쓴다. */
+  /**
+   * true면 Esc로 닫히지 않는다. 브라우저가 어떻게든 닫으면(Chromium의 연속 Esc) 다시 연다.
+   * 닫는 것은 부모가 컴포넌트를 언마운트해서 한다(그때는 close 핸들러가 불리지 않는다).
+   * 한 번만 보여 주는 정보를 담은 창에 쓴다.
+   */
   persistent?: boolean;
 }
 
@@ -22,7 +26,15 @@ export function Dialog({ title, onClose, children, wide, persistent }: Props) {
       ref={ref}
       className={wide ? "dialog wide" : "dialog"}
       aria-labelledby="dialog-title"
-      onClose={onClose}
+      onClose={() => {
+        if (persistent) {
+          // 브라우저가 cancel을 막지 못하고 닫았으면(Chromium의 연속 Esc) 다시 연다.
+          const d = ref.current;
+          if (d && !d.open) d.showModal();
+          return;
+        }
+        onClose();
+      }}
       onCancel={persistent ? (e) => e.preventDefault() : undefined}
     >
       <h2 id="dialog-title">{title}</h2>
