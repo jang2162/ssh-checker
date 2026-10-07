@@ -75,7 +75,7 @@ ssl-checker를 **인증서 모니터링이 주목적이고, ACME DNS-01 위임�
 
 ### check_results (새)
 
-대상 × 접속 주소별 점검 한 건.
+대상 × 접속 주소별 점검 한 건. 인증서를 받지 못한 행도 넣기 쉽게, `not_before`·`not_after`만 NULL을 허용하고 나머지는 `NOT NULL`에 빈 값 기본값(`''`, `'{}'`, `0`, `false`)을 둔다.
 
 | 컬럼 | 타입 | 설명 |
 | --- | --- | --- |
@@ -185,7 +185,7 @@ ssl-checker를 **인증서 모니터링이 주목적이고, ACME DNS-01 위임�
 | `mismatch` | 다른 값 |
 | `error` | 질의 실패·타임아웃(5초) |
 
-구현은 `net.Resolver`에 `Dial`을 지정해 그 리졸버로만 묻는다(외부 DNS 라이브러리 없이).
+구현은 `golang.org/x/net/dns/dnsmessage`로 CNAME 질의를 직접 만들어 그 리졸버에 UDP로 보낸다. `net.Resolver.LookupCNAME`은 A/AAAA를 묻고 CNAME 체인을 끝까지 따라가므로, TXT만 있는 챌린지 이름에서 결과가 불분명해 쓰지 않는다.
 
 ## API
 
@@ -361,11 +361,11 @@ FROM distroless/static  → 바이너리만
 
 | 변수 | 서비스 | 기본값 | 설명 |
 | --- | --- | --- | --- |
-| `CHECK_INTERVAL` | worker | `6h` | TLS 점검·CNAME 확인 주기. Go duration. 최소 `5m` |
+| `CHECK_INTERVAL` | api, worker | `6h` | TLS 점검·CNAME 확인 주기. Go duration. 최소 `5m`. api는 `/api/config`에 보여 주기만 한다 |
 | `DNS_RESOLVER` | api, worker | `1.1.1.1:53` | CNAME 확인에 쓸 리졸버 `host:port` |
 | `PUBLIC_URL` | api | 비움 | 화면·llms.txt·자격 증명에 쓸 외부 주소(예: `https://ssl-checker.example.com`). 비우면 요청에서 만든다 |
 
-compose의 `x-common-env`에 `DNS_RESOLVER`, api에 `PUBLIC_URL`, worker에 `CHECK_INTERVAL`을 기본값과 함께 추가한다.
+compose의 `x-common-env`에 `DNS_RESOLVER`·`CHECK_INTERVAL`, api에 `PUBLIC_URL`을 기본값과 함께 추가한다.
 
 ## 오류 처리
 
@@ -398,8 +398,8 @@ compose의 `x-common-env`에 `DNS_RESOLVER`, api에 `PUBLIC_URL`, worker에 `CHE
 
 ## 구현 계획 분할
 
-1. **모니터링 엔진과 조회 API**: 마이그레이션 0002, `monitor`, `cnamecheck`, store 확장, worker 주기 작업(점검·CNAME·정리), `/update`의 ACME 상태 컬럼 갱신, 조회 API(`/api/summary`, `/api/domains`, `/api/domains/{id}`, `/api/targets/{id}/results`, `/api/config`), 새 환경변수.
-2. **관리 API와 세션**: `session`, 쓰기 API 전부, `acmedns.Service`의 ACME 켜기·재발급·끄기, `/register` 재구성, `/api/audit`, `PUBLIC_URL`과 일회성 자격 증명의 `acme_sh`.
+1. **모니터링 엔진과 조회 API**: 마이그레이션 0002, `monitor`, `cnamecheck`, store 확장, worker 주기 작업(점검·CNAME·정리), `/update`의 ACME 상태 컬럼 갱신, 조회 API(`/api/summary`, `/api/domains`, `/api/domains/{id}`, `/api/targets/{id}/results`, `/api/config`), 새 환경변수(`CHECK_INTERVAL`, `DNS_RESOLVER`, `PUBLIC_URL`)와 공개 주소 계산.
+2. **관리 API와 세션**: `session`, 쓰기 API 전부, `acmedns.Service`의 ACME 켜기·재발급·끄기, `/register` 재구성, `/api/audit`, 일회성 자격 증명의 `acme_sh`.
 3. **대시보드와 llms.txt**: `web/` SPA, `webui` 내장·폴백, Dockerfile Node 단계, `llmstxt`, smoke 확장, 문서.
 
 각 계획은 끝나면 동작하는 소프트웨어를 남긴다. 1번 뒤에는 API로 상태를 볼 수 있고, 2번 뒤에는 API로 전부 관리할 수 있다.
