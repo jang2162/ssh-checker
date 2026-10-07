@@ -39,5 +39,13 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/update" -H "X-Api-U
   -d "{\"subdomain\":\"$sub\",\"txt\":\"$txt\"}")
 [ "$code" = 401 ] || { echo "wrong key returned $code" >&2; exit 1; }
 
+summary=$(curl -fsS "$BASE/api/summary")
+echo "$summary" | grep -q '"domains":1' || { echo "unexpected summary: $summary" >&2; exit 1; }
+domains=$(curl -fsS "$BASE/api/domains")
+echo "$domains" | grep -q '"fqdn":"smoke.example"' || { echo "unexpected domains: $domains" >&2; exit 1; }
+echo "$domains" | grep -q '"enabled":true' || { echo "acme not shown as enabled: $domains" >&2; exit 1; }
+apicfg=$(curl -fsS "$BASE/api/config")
+echo "$apicfg" | grep -q "\"challenge_zone\":\"$CHALLENGE_ZONE\"" || { echo "unexpected config: $apicfg" >&2; exit 1; }
+
 $COMPOSE ps worker --format '{{.State}}' | grep -q running || { $COMPOSE logs worker; echo "worker not running" >&2; exit 1; }
 echo "smoke OK"

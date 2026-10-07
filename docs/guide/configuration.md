@@ -17,6 +17,9 @@ ssl-checker는 모든 설정을 환경변수로 받습니다. `deploy/compose.ya
 | `CF_API_TOKEN` | 전용 존의 `Zone > DNS > Edit` 권한만 가진 Cloudflare 토큰 | api, worker | | 조건부 (`cloudflare`일 때 필수) |
 | `CF_ZONE_ID` | 챌린지 TXT를 둘 Cloudflare 존의 Zone ID. 비우면 `CHALLENGE_ZONE`을 존 이름으로 보고 조회합니다. **`CHALLENGE_ZONE`이 하위 이름이면 필수**이고, 존 단위 토큰은 조회 권한이 없을 수 있으므로 항상 넣는 것을 권장합니다. | api, worker | | 조건부 |
 | `TXT_TTL` | 챌린지 TXT의 TTL(초, 1~86400). Cloudflare는 60 미만이면 60으로 올려 기록합니다. | api, worker | `60` | 선택 |
+| `CHECK_INTERVAL` | 인증서 점검과 ACME CNAME 확인 주기. Go duration 형식이고 최소 `5m`입니다. api는 `/api/config`에 보여 주기만 합니다. | api, worker | `6h` | 선택 |
+| `DNS_RESOLVER` | ACME CNAME 확인에 쓸 리졸버 `host:port`. Let's Encrypt가 보는 공개 DNS 기준으로 확인하려고 사내 DNS 대신 공개 리졸버를 씁니다. 포트 없는 IP는 53번으로 봅니다. | api, worker | `1.1.1.1:53` | 선택 |
+| `PUBLIC_URL` | 클라이언트가 api에 닿는 외부 주소. 화면과 자격 증명 안내의 `ACMEDNS_BASE_URL`에 씁니다. 비우면 요청에서 만듭니다(신뢰 프록시의 `X-Forwarded-Proto`·`X-Forwarded-Host` 포함). | api | `https://ssl-checker.example.com` | 선택 |
 | `ADMIN_KEY` | `/register`의 Bearer 키. 32바이트 이상이어야 api가 시작합니다. | api | `openssl rand -hex 32` | 필수 |
 | `POSTGRES_PASSWORD` | DB 비밀번호. compose가 이 값으로 `DATABASE_URL`을 만들어 넘기므로 URL에 그대로 쓸 수 있는 문자만 씁니다. | 전체 | `openssl rand -hex 24` | 필수 |
 
@@ -33,8 +36,8 @@ compose 없이 실행할 때는 역할마다 아래 변수를 넣습니다.
 | 명령 | 필요한 변수 |
 | --- | --- |
 | `ssl-checker migrate` | `DATABASE_URL` |
-| `ssl-checker serve --listen :8080` | `DATABASE_URL`, `DNS_PROVIDER`, `CHALLENGE_ZONE`, `ADMIN_KEY`, (`CF_API_TOKEN`, `CF_ZONE_ID`, `TXT_TTL`, `TRUSTED_PROXIES`) |
-| `ssl-checker worker` | `DATABASE_URL`, `DNS_PROVIDER`, `CHALLENGE_ZONE`, (`CF_API_TOKEN`, `CF_ZONE_ID`, `TXT_TTL`) |
+| `ssl-checker serve --listen :8080` | `DATABASE_URL`, `DNS_PROVIDER`, `CHALLENGE_ZONE`, `ADMIN_KEY`, (`CF_API_TOKEN`, `CF_ZONE_ID`, `TXT_TTL`, `TRUSTED_PROXIES`, `CHECK_INTERVAL`, `DNS_RESOLVER`, `PUBLIC_URL`) |
+| `ssl-checker worker` | `DATABASE_URL`, `DNS_PROVIDER`, `CHALLENGE_ZONE`, (`CF_API_TOKEN`, `CF_ZONE_ID`, `TXT_TTL`, `CHECK_INTERVAL`, `DNS_RESOLVER`) |
 | `ssl-checker healthcheck --url http://127.0.0.1:8080/health` | 없음 |
 
 설정이 잘못되면 프로세스가 문제 있는 변수 이름을 모두 출력하고 종료합니다.

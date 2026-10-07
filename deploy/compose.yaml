@@ -18,6 +18,8 @@ x-common-env: &common-env
   CF_ZONE_ID: ${CF_ZONE_ID:-}
   CHALLENGE_ZONE: ${CHALLENGE_ZONE:?set CHALLENGE_ZONE}
   TXT_TTL: ${TXT_TTL:-60}
+  CHECK_INTERVAL: ${CHECK_INTERVAL:-6h}
+  DNS_RESOLVER: ${DNS_RESOLVER:-1.1.1.1:53}
 
 services:
   migrate:
@@ -52,6 +54,7 @@ services:
       <<: *common-env
       ADMIN_KEY: ${ADMIN_KEY:?set ADMIN_KEY}
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
+      PUBLIC_URL: ${PUBLIC_URL:-}
     depends_on:
       migrate:
         condition: service_completed_successfully

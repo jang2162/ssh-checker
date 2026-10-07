@@ -97,3 +97,40 @@ DB 연결과 DNS 공급자 상태를 확인합니다.
 | `provider` | `ok`, `transient`(응답 지연·요청 제한), `config`(토큰·존 설정 오류) |
 
 둘 다 `ok`면 `200`, 아니면 `503`을 돌려줍니다. 공급자 확인은 외부 API를 부르므로 결과를 1분 동안 재사용하고, 한 번에 3초까지만 기다립니다.
+
+## 조회 API (`/api`)
+
+인증서 점검 결과와 ACME 상태를 JSON으로 봅니다. 인증 없이 누구나 부를 수 있습니다. 시각은 RFC 3339 UTC입니다. 키와 키 해시는 어떤 응답에도 들어가지 않습니다.
+
+| 요청 | 내용 |
+| --- | --- |
+| `GET /api/summary` | 도메인 수와 상태별 개수, 마지막 점검 시각 |
+| `GET /api/domains` | 도메인 목록. `?status=critical`처럼 상태로 거를 수 있습니다 |
+| `GET /api/domains/{id}` | 대상별·접속 주소별 최신 점검 결과와 ACME 상태 |
+| `GET /api/targets/{id}/results?limit=50` | 대상의 점검 이력, 최신순. `limit` 최대 500 |
+| `GET /api/config` | `challenge_zone`, `check_interval`, `public_url` |
+
+상태는 `critical` > `warning` > `info` > `ok` > `unknown` 순으로 나쁩니다. 도메인 상태는 대상과 ACME 상태 중 가장 나쁜 것입니다.
+
+| 코드 | 상태 | 뜻 |
+| --- | --- | --- |
+| `CONNECT_FAILED` | critical | 접속이나 TLS 핸드셰이크 실패(10초) |
+| `CERT_EXPIRED` | critical | 인증서 만료 |
+| `CERT_EXPIRES_SOON` | critical | 만료까지 7일 미만 |
+| `CHAIN_INVALID` | critical | 체인 검증 실패(자체 서명 포함) |
+| `HOSTNAME_MISMATCH` | critical | 인증서가 접속 이름을 덮지 않음 |
+| `RENEWAL_OVERDUE` | warning | 남은 기간이 수명의 1/3 미만. 정상이면 이미 갱신됐을 시점 |
+| `SERIAL_MISMATCH` | warning | 같은 대상의 서버들이 서로 다른 인증서를 냄(일부 배포 누락) |
+| `TLS_OUTDATED` | warning | TLS 1.2 미만으로 협상됨 |
+| `CNAME_MISSING` / `CNAME_MISMATCH` | warning | ACME를 켰는데 `_acme-challenge` CNAME이 없거나 다른 곳을 가리킴 |
+| `TXT_UPDATE_FAILING` | warning | `/update`가 3번 이상 연달아 실패 |
+| `WEAK_KEY` | info | RSA 2048비트 미만, ECDSA 256비트 미만 |
+| `NOT_CHECKED` | unknown | 아직 점검 결과가 없음 |
+
+오류는 `{"error":"<코드>"}`입니다: 400 `invalid_status`·`invalid_limit`, 404 `not_found`, 500 `db_error`.
+
+```bash
+curl -s <앱>/api/domains?status=critical
+```
+
+도메인과 모니터링 대상을 추가·수정하는 API는 다음 버전에서 추가됩니다.
