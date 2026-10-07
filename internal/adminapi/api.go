@@ -52,6 +52,7 @@ func (a *API) routes() []route {
 		{"GET", "/api/domains/{id}", a.getDomain},
 		{"GET", "/api/targets/{id}/results", a.targetResults},
 		{"GET", "/api/config", a.config},
+		{"GET", "/api/codes", a.codes},
 		{"GET", "/api/session", a.sessionStatus},
 		{"POST", "/api/session", jsonOnly(a.login)},
 		{"DELETE", "/api/session", jsonOnly(a.logout)},
@@ -284,6 +285,11 @@ func (a *API) config(w http.ResponseWriter, r *http.Request) {
 		"check_interval": a.CheckInterval.String(),
 		"public_url":     a.PublicURLFor(r),
 	})
+}
+
+// codes는 판정 코드 표다. 화면과 llms.txt가 같은 설명을 쓰도록 한 곳에서 낸다.
+func (a *API) codes(w http.ResponseWriter, r *http.Request) {
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"codes": monitor.Codes()})
 }
 
 // hostRE는 이름[:포트] 또는 [IPv6][:포트]다. 공개 주소는 자격 증명 안내에 들어가므로 경로·사용자 정보·공백이 섞인 값은 받지 않는다.

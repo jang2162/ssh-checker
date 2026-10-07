@@ -388,6 +388,21 @@ func TestConfig(t *testing.T) {
 	}
 }
 
+func TestCodes(t *testing.T) {
+	f := newFixture(t)
+	var out struct {
+		Codes []struct{ Code, Status, Meaning string }
+	}
+	f.getJSON("/api/codes", &out)
+	want := monitor.Codes()
+	if len(out.Codes) != len(want) {
+		t.Fatalf("codes = %d, want %d", len(out.Codes), len(want))
+	}
+	if out.Codes[0].Code != want[0].Code || out.Codes[0].Status != "critical" || out.Codes[0].Meaning == "" {
+		t.Fatalf("first code = %+v", out.Codes[0])
+	}
+}
+
 func TestUnknownPathAndMethod(t *testing.T) {
 	f := newFixture(t)
 	rec := f.get("/api/nope")
@@ -395,7 +410,7 @@ func TestUnknownPathAndMethod(t *testing.T) {
 	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
 		t.Fatalf("content-type = %q", ct)
 	}
-	for _, path := range []string{"/api/domains", "/api/domains/1", "/api/summary", "/api/targets/1/results", "/api/config"} {
+	for _, path := range []string{"/api/domains", "/api/domains/1", "/api/summary", "/api/targets/1/results", "/api/config", "/api/codes"} {
 		rec := f.do(call{method: http.MethodPut, path: path})
 		expectError(t, rec, http.StatusMethodNotAllowed, "method_not_allowed")
 		if allow := rec.Header().Get("Allow"); !strings.Contains(allow, "GET") {
