@@ -86,6 +86,34 @@ func (s *Store) GetDomain(ctx context.Context, id int64) (Domain, error) {
 	return d, nil
 }
 
+func (s *Store) UpdateDomainMemo(ctx context.Context, id int64, memo string) (Domain, error) {
+	rows, err := s.pool.Query(ctx, `UPDATE domains SET memo = $2 WHERE id = $1 RETURNING id, fqdn, memo, created_at`, id, memo)
+	if err != nil {
+		return Domain{}, fmt.Errorf("store: update domain: %w", err)
+	}
+	d, err := pgx.CollectExactlyOneRow(rows, scanDomain)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Domain{}, ErrNotFound
+	}
+	if err != nil {
+		return Domain{}, fmt.Errorf("store: update domain: %w", err)
+	}
+	return d, nil
+}
+
+// DeleteDomain은 도메인과 대상·점검 기록·ACME 계정·TXT 기록을 함께 지운다(외래 키 cascade).
+// 공급자의 TXT는 지우지 않으므로, ACME가 켜져 있으면 먼저 끈다.
+func (s *Store) DeleteDomain(ctx context.Context, id int64) error {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM domains WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("store: delete domain: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // Target은 저장된 모니터링 대상이다. 점검에 필요한 값은 monitor.Target에 있다.
 type Target struct {
 	monitor.Target
@@ -174,6 +202,45 @@ func (s *Store) GetTarget(ctx context.Context, id int64) (Target, error) {
 		return Target{}, ErrNotFound
 	}
 	return ts[0], nil
+}
+
+// TargetFields는 대상에서 바꿀 수 있는 값이다.
+type TargetFields struct {
+	Hostname string
+	Port     int
+	SNI      string
+	IPs      []netip.Addr
+	Memo     string
+}
+
+func (s *Store) UpdateTarget(ctx context.Context, id int64, f TargetFields) (Target, error) {
+	rows, err := s.pool.Query(ctx, `UPDATE monitor_targets SET hostname = $2, port = $3, sni = $4, ips = $5, memo = $6
+		WHERE id = $1 RETURNING `+targetCols, id, f.Hostname, f.Port, f.SNI, addrStrings(f.IPs), f.Memo)
+	if err == nil {
+		var t Target
+		t, err = pgx.CollectExactlyOneRow(rows, scanTarget)
+		if err == nil {
+			return t, nil
+		}
+	}
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return Target{}, ErrNotFound
+	case pgCode(err) == codeUniqueViolation:
+		return Target{}, ErrTargetExists
+	}
+	return Target{}, fmt.Errorf("store: update target: %w", err)
+}
+
+func (s *Store) DeleteTarget(ctx context.Context, id int64) error {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM monitor_targets WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("store: delete target: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 const resultCols = `address, checked_at, status, reasons, tls_version, cipher, subject_cn, sans, issuer, serial,

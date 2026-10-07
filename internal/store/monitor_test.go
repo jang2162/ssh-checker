@@ -220,3 +220,67 @@ func TestPruneResults(t *testing.T) {
 		t.Fatalf("history = %+v", hist)
 	}
 }
+
+func TestUpdateAndDeleteDomain(t *testing.T) {
+	st, pool := newStore(t)
+	ctx := context.Background()
+	d := mustDomain(t, st, "a.com")
+	got, err := st.UpdateDomainMemo(ctx, d.ID, "web servers")
+	if err != nil || got.Memo != "web servers" || got.FQDN != "a.com" || got.ID != d.ID {
+		t.Fatalf("UpdateDomainMemo = %+v, %v", got, err)
+	}
+	if _, err := st.UpdateDomainMemo(ctx, 99999, "x"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("missing = %v", err)
+	}
+	create(t, st, "a.com")
+	tg := mustTarget(t, st, d.ID, "www.a.com", "10.0.0.1")
+	save(t, st, tg.ID, okResult("10.0.0.1:443", t0, "01"))
+	if err := st.DeleteDomain(ctx, d.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		"SELECT count(*) FROM domains", "SELECT count(*) FROM monitor_targets",
+		"SELECT count(*) FROM check_results", "SELECT count(*) FROM acme_accounts",
+	} {
+		var n int
+		if err := pool.QueryRow(ctx, q).Scan(&n); err != nil || n != 0 {
+			t.Errorf("%s = %d, %v", q, n, err)
+		}
+	}
+	if err := st.DeleteDomain(ctx, d.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("second delete = %v", err)
+	}
+}
+
+func TestUpdateAndDeleteTarget(t *testing.T) {
+	st, _ := newStore(t)
+	ctx := context.Background()
+	d := mustDomain(t, st, "a.com")
+	tg := mustTarget(t, st, d.ID, "www.a.com", "10.0.0.1")
+	other := mustTarget(t, st, d.ID, "api.a.com")
+
+	f := store.TargetFields{Hostname: "www.a.com", Port: 8443, SNI: "a.com",
+		IPs: []netip.Addr{netip.MustParseAddr("10.0.0.2"), netip.MustParseAddr("2001:db8::2")}, Memo: "moved"}
+	got, err := st.UpdateTarget(ctx, tg.ID, f)
+	if err != nil || got.ID != tg.ID || got.DomainID != d.ID || got.Port != 8443 || got.SNI != "a.com" || got.Memo != "moved" ||
+		!slices.Equal(got.IPs, f.IPs) {
+		t.Fatalf("UpdateTarget = %+v, %v", got, err)
+	}
+	reread, _ := st.GetTarget(ctx, tg.ID)
+	if !slices.Equal(reread.IPs, f.IPs) || reread.Port != 8443 {
+		t.Fatalf("reread = %+v", reread)
+	}
+	clash := store.TargetFields{Hostname: "api.a.com", Port: 443}
+	if _, err := st.UpdateTarget(ctx, tg.ID, clash); !errors.Is(err, store.ErrTargetExists) {
+		t.Fatalf("clash = %v", err)
+	}
+	if _, err := st.UpdateTarget(ctx, 99999, f); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("missing = %v", err)
+	}
+	if err := st.DeleteTarget(ctx, other.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DeleteTarget(ctx, other.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("second delete = %v", err)
+	}
+}
