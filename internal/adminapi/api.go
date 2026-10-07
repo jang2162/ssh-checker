@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"ssl-checker/internal/acmedns"
+	"ssl-checker/internal/dnsprovider"
 	"ssl-checker/internal/httpx"
 	"ssl-checker/internal/monitor"
 	"ssl-checker/internal/store"
@@ -30,7 +32,9 @@ type API struct {
 	IP            httpx.ClientIP
 	Now           func() time.Time
 	Log           *slog.Logger
-	Auth          *Auth // 관리자 확인
+	Auth          *Auth            // 관리자 확인
+	Svc           *acmedns.Service // ACME 켜기·재발급·끄기
+	Runner        *monitor.Runner  // "지금 점검"과 대상 추가·수정 직후 점검
 }
 
 type route struct {
@@ -50,6 +54,13 @@ func (a *API) routes() []route {
 		{"POST", "/api/session", jsonOnly(a.login)},
 		{"DELETE", "/api/session", jsonOnly(a.logout)},
 		{"GET", "/api/audit", a.admin(a.listAudit)},
+		{"POST", "/api/domains", a.write(a.createDomain)},
+		{"PATCH", "/api/domains/{id}", a.write(a.patchDomain)},
+		{"DELETE", "/api/domains/{id}", a.write(a.deleteDomain)},
+		{"POST", "/api/domains/{id}/targets", a.write(a.createTarget)},
+		{"PATCH", "/api/targets/{id}", a.write(a.patchTarget)},
+		{"DELETE", "/api/targets/{id}", a.write(a.deleteTarget)},
+		{"POST", "/api/targets/{id}/check", a.write(a.checkTarget)},
 	}
 }
 
@@ -88,6 +99,17 @@ func (a *API) now() time.Time {
 
 func (a *API) dbError(w http.ResponseWriter, op string, err error) {
 	a.Log.Error(op, "err", err)
+	httpx.WriteError(w, http.StatusInternalServerError, "db_error")
+}
+
+// serviceError는 ACME 작업 실패를 응답한다. DNS 공급자 실패와 DB 실패를 구분한다.
+func (a *API) serviceError(w http.ResponseWriter, op string, err error) {
+	a.Log.Error(op, "err", err)
+	var perr *dnsprovider.Error
+	if errors.As(err, &perr) {
+		httpx.WriteError(w, http.StatusInternalServerError, "dns_provider_error")
+		return
+	}
 	httpx.WriteError(w, http.StatusInternalServerError, "db_error")
 }
 
@@ -171,14 +193,46 @@ func (a *API) listDomains(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"domains": out})
 }
 
+// loadDetail은 도메인 상세 응답이다. 도메인이 없으면 store.ErrNotFound다.
+func (a *API) loadDetail(ctx context.Context, id int64) (domainDetail, error) {
+	d, err := a.Store.GetDomain(ctx, id)
+	if err != nil {
+		return domainDetail{}, err
+	}
+	targets, err := a.Store.TargetsByDomain(ctx, id)
+	if err != nil {
+		return domainDetail{}, err
+	}
+	latest, err := a.Store.LatestResults(ctx, targets)
+	if err != nil {
+		return domainDetail{}, err
+	}
+	var acme *store.ACMEState
+	switch st, err := a.Store.ACMEStateByDomain(ctx, id); {
+	case err == nil:
+		acme = &st
+	case !errors.Is(err, store.ErrNotFound):
+		return domainDetail{}, err
+	}
+	overall, per := assess(targets, latest, acme)
+	return domainDetail{
+		ID: d.ID, FQDN: d.FQDN, Memo: d.Memo, CreatedAt: d.CreatedAt, Assessment: overall,
+		Targets: targetViews(targets, latest, per), ACME: a.acmeView(d.FQDN, acme),
+	}, nil
+}
+
 func (a *API) getDomain(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathID(r)
 	if !ok {
 		httpx.WriteError(w, http.StatusNotFound, "not_found")
 		return
 	}
-	ctx := r.Context()
-	d, err := a.Store.GetDomain(ctx, id)
+	a.writeDetail(w, r, http.StatusOK, id)
+}
+
+// writeDetail은 도메인 상세를 status로 응답한다.
+func (a *API) writeDetail(w http.ResponseWriter, r *http.Request, status int, id int64) {
+	detail, err := a.loadDetail(r.Context(), id)
 	if errors.Is(err, store.ErrNotFound) {
 		httpx.WriteError(w, http.StatusNotFound, "not_found")
 		return
@@ -187,29 +241,7 @@ func (a *API) getDomain(w http.ResponseWriter, r *http.Request) {
 		a.dbError(w, "get domain", err)
 		return
 	}
-	targets, err := a.Store.TargetsByDomain(ctx, id)
-	if err != nil {
-		a.dbError(w, "get domain targets", err)
-		return
-	}
-	latest, err := a.Store.LatestResults(ctx, targets)
-	if err != nil {
-		a.dbError(w, "get domain results", err)
-		return
-	}
-	var acme *store.ACMEState
-	switch st, err := a.Store.ACMEStateByDomain(ctx, id); {
-	case err == nil:
-		acme = &st
-	case !errors.Is(err, store.ErrNotFound):
-		a.dbError(w, "get domain acme", err)
-		return
-	}
-	overall, per := assess(targets, latest, acme)
-	httpx.WriteJSON(w, http.StatusOK, domainDetail{
-		ID: d.ID, FQDN: d.FQDN, Memo: d.Memo, CreatedAt: d.CreatedAt, Assessment: overall,
-		Targets: targetViews(targets, latest, per), ACME: a.acmeView(d.FQDN, acme),
-	})
+	httpx.WriteJSON(w, status, detail)
 }
 
 func (a *API) targetResults(w http.ResponseWriter, r *http.Request) {

@@ -132,3 +132,7 @@ func targetViews(targets []store.Target, latest map[int64][]monitor.Result, per 
 	}
 	return out
 }
+
+func singleTargetView(t store.Target, rs []monitor.Result) targetView {
+	return targetViews([]store.Target{t}, map[int64][]monitor.Result{t.ID: rs}, []monitor.Assessment{monitor.AssessTarget(rs)})[0]
+}

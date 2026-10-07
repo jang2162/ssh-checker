@@ -15,9 +15,11 @@ import (
 
 	"github.com/google/uuid"
 
+	"ssl-checker/internal/acmedns"
 	"ssl-checker/internal/adminapi"
 	"ssl-checker/internal/cnamecheck"
 	"ssl-checker/internal/db/dbtest"
+	"ssl-checker/internal/dnsprovider/memory"
 	"ssl-checker/internal/httpx"
 	"ssl-checker/internal/monitor"
 	"ssl-checker/internal/store"
@@ -34,18 +36,26 @@ type fixture struct {
 	st  *store.Store
 	api *adminapi.API
 	h   http.Handler
+	mem *memory.Provider
+	svc *acmedns.Service
 }
 
 func newFixture(t *testing.T) *fixture {
-	st := store.New(dbtest.New(t))
+	pool := dbtest.New(t)
+	st := store.New(pool)
+	mem := memory.New()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	svc := &acmedns.Service{Store: st, Provider: mem, Zone: "acme.test", TTL: 60}
 	api := &adminapi.API{
-		Store: st, Zone: "acme.test", CheckInterval: 6 * time.Hour, Auth: adminapi.NewAuth(adminKey),
-		IP:  httpx.ClientIP{Trusted: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}},
-		Now: func() time.Time { return now }, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Store: st, Svc: svc, Zone: "acme.test", CheckInterval: 6 * time.Hour,
+		Runner: &monitor.Runner{Prober: &monitor.Prober{Timeout: 300 * time.Millisecond}, Sink: st, Log: log},
+		Auth:   adminapi.NewAuth(adminKey),
+		IP:     httpx.ClientIP{Trusted: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}},
+		Now:    func() time.Time { return now }, Log: log,
 	}
 	mux := http.NewServeMux()
 	api.Register(mux)
-	return &fixture{t: t, st: st, api: api, h: mux}
+	return &fixture{t: t, st: st, api: api, h: mux, mem: mem, svc: svc}
 }
 
 func (f *fixture) get(path string) *httptest.ResponseRecorder {
