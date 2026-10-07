@@ -108,13 +108,13 @@ DB 연결과 DNS 공급자 상태를 확인합니다.
 | `GET /api/domains` | 도메인 목록. `?status=critical`처럼 상태로 거를 수 있습니다 |
 | `GET /api/domains/{id}` | 대상별·접속 주소별 최신 점검 결과와 ACME 상태 |
 | `GET /api/targets/{id}/results?limit=50` | 대상의 점검 이력, 최신순. `limit` 최대 500 |
-| `GET /api/config` | `challenge_zone`, `check_interval`, `public_url` |
+| `GET /api/config` | `challenge_zone`, `check_interval`(Go 시간 문자열, 예: `"6h0m0s"`), `public_url` |
 
 상태는 `critical` > `warning` > `info` > `ok` > `unknown` 순으로 나쁩니다. 도메인 상태는 대상과 ACME 상태 중 가장 나쁜 것입니다.
 
 | 코드 | 상태 | 뜻 |
 | --- | --- | --- |
-| `CONNECT_FAILED` | critical | 접속이나 TLS 핸드셰이크 실패(10초) |
+| `CONNECT_FAILED` | critical | 접속이나 TLS 핸드셰이크 실패(10초). Go TLS 클라이언트가 거부하는 아주 오래된 서버(RSA 키 교환만 지원, 1024비트 미만 RSA 키, SHA-1 서명 등)도 `CONNECT_FAILED`로 나오므로 `error` 필드를 확인합니다. |
 | `CERT_EXPIRED` | critical | 인증서 만료 |
 | `CERT_EXPIRES_SOON` | critical | 만료까지 7일 미만 |
 | `CHAIN_INVALID` | critical | 체인 검증 실패(자체 서명 포함) |
@@ -130,7 +130,7 @@ DB 연결과 DNS 공급자 상태를 확인합니다.
 오류는 `{"error":"<코드>"}`입니다: 400 `invalid_status`·`invalid_limit`, 404 `not_found`, 500 `db_error`.
 
 ```bash
-curl -s <앱>/api/domains?status=critical
+curl -s '<앱>/api/domains?status=critical'
 ```
 
 도메인과 모니터링 대상을 추가·수정하는 API는 다음 버전에서 추가됩니다.

@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"slices"
 	"testing"
+	"time"
 
 	"ssl-checker/internal/cnamecheck"
 	"ssl-checker/internal/store"
@@ -51,6 +52,15 @@ func TestACMEStates(t *testing.T) {
 	s, _ = st.ACMEStateByDomain(ctx, a.DomainID)
 	if s.CNAMEStatus != cnamecheck.StatusMismatch || s.CNAMEValue != "x.other.test" || s.CNAMECheckedAt == nil || !s.CNAMECheckedAt.Equal(t0) {
 		t.Fatalf("after cname = %+v", s)
+	}
+
+	// 조회 오류는 마지막으로 알아낸 값을 지우지 않는다.
+	if err := st.SetCNAMEStatus(ctx, a.ID, cnamecheck.StatusError, "", t0.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	s, _ = st.ACMEStateByDomain(ctx, a.DomainID)
+	if s.CNAMEStatus != cnamecheck.StatusError || s.CNAMEValue != "x.other.test" || !s.CNAMECheckedAt.Equal(t0.Add(time.Minute)) {
+		t.Fatalf("after cname error = %+v", s)
 	}
 
 	b := mustDomain(t, st, "b.com")

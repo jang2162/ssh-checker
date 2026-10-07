@@ -38,6 +38,8 @@ CREATE TABLE check_results (
 );
 
 CREATE INDEX check_results_target_time ON check_results (target_id, checked_at DESC);
+-- 최신 결과 조회(주소별 LIMIT 1)용. target_time은 이력과 호스트명 모드 조회, time은 정리에 쓴다.
+CREATE INDEX check_results_target_address_time ON check_results (target_id, address, checked_at DESC, id DESC);
 CREATE INDEX check_results_time ON check_results (checked_at);
 
 ALTER TABLE acme_accounts

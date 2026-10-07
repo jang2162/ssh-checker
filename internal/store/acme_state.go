@@ -78,8 +78,10 @@ func (s *Store) ACMEStateByDomain(ctx context.Context, domainID int64) (ACMEStat
 	return st, nil
 }
 
+// SetCNAMEStatus는 CNAME 점검 결과를 남긴다. 조회 오류일 때는 마지막으로 알아낸 값을 지우지 않는다.
 func (s *Store) SetCNAMEStatus(ctx context.Context, accountID int64, status cnamecheck.Status, value string, at time.Time) error {
-	_, err := s.pool.Exec(ctx, `UPDATE acme_accounts SET cname_status = $2, cname_value = $3, cname_checked_at = $4 WHERE id = $1`,
+	_, err := s.pool.Exec(ctx, `UPDATE acme_accounts SET cname_status = $2,
+		cname_value = CASE WHEN $2 = 'error' THEN cname_value ELSE $3 END, cname_checked_at = $4 WHERE id = $1`,
 		accountID, string(status), value, at)
 	if err != nil {
 		return fmt.Errorf("store: set cname status: %w", err)

@@ -219,59 +219,71 @@ func scanResult(row pgx.Row, prefix ...any) (monitor.Result, error) {
 }
 
 // LatestResults는 대상마다 지금 설정에 맞는 접속 주소별 최신 결과다. 모든 대상의 키가 들어 있다.
+// IP 목록이 있으면 DialAddresses 순서대로 주소별 최신 한 건, 없으면 호스트명으로 접속한 가장 최근 한 건만 쓴다
+// (풀린 주소가 바뀌었을 수 있다). 조회마다 인덱스로 한 건만 읽어 전체 이력을 훑지 않는다.
 func (s *Store) LatestResults(ctx context.Context, targets []Target) (map[int64][]monitor.Result, error) {
-	ids := make([]int64, len(targets))
-	for i, t := range targets {
-		ids[i] = t.ID
+	var ipIDs, hostIDs []int64
+	var ipAddrs []string
+	for _, t := range targets {
+		if len(t.IPs) == 0 {
+			hostIDs = append(hostIDs, t.ID)
+			continue
+		}
+		for _, a := range t.DialAddresses() {
+			ipIDs = append(ipIDs, t.ID)
+			ipAddrs = append(ipAddrs, a)
+		}
 	}
-	rows, err := s.pool.Query(ctx, `SELECT DISTINCT ON (target_id, address) target_id, `+resultCols+`
-		FROM check_results WHERE target_id = ANY($1)
-		ORDER BY target_id, address, checked_at DESC, id DESC`, ids)
+	rows, err := s.pool.Query(ctx, `
+		SELECT k.target_id, r.* FROM unnest($1::bigint[], $2::text[]) AS k(target_id, address)
+		CROSS JOIN LATERAL (SELECT `+resultCols+` FROM check_results c
+			WHERE c.target_id = k.target_id AND c.address = k.address
+			ORDER BY c.checked_at DESC, c.id DESC LIMIT 1) r
+		UNION ALL
+		SELECT k.target_id, r.* FROM unnest($3::bigint[]) AS k(target_id)
+		CROSS JOIN LATERAL (SELECT `+resultCols+` FROM check_results c
+			WHERE c.target_id = k.target_id
+			ORDER BY c.checked_at DESC, c.id DESC LIMIT 1) r`, ipIDs, ipAddrs, hostIDs)
 	if err != nil {
 		return nil, fmt.Errorf("store: latest results: %w", err)
 	}
 	defer rows.Close()
-	byTarget := map[int64][]monitor.Result{}
+	type key struct {
+		id   int64
+		addr string
+	}
+	found := map[key]monitor.Result{}
 	for rows.Next() {
 		var id int64
 		r, err := scanResult(rows, &id)
 		if err != nil {
 			return nil, fmt.Errorf("store: latest results: %w", err)
 		}
-		byTarget[id] = append(byTarget[id], r)
+		found[key{id, r.Address}] = r
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("store: latest results: %w", err)
 	}
 	out := make(map[int64][]monitor.Result, len(targets))
 	for _, t := range targets {
-		out[t.ID] = currentResults(t, byTarget[t.ID])
-	}
-	return out, nil
-}
-
-// currentResults는 대상의 지금 설정에 맞는 결과만 남긴다. IP 목록에서 빠진 주소의 옛 결과는 버리고,
-// IP 목록이 없으면 호스트명으로 접속한 가장 최근 결과 하나만 쓴다(풀린 주소가 바뀌었을 수 있다).
-func currentResults(t Target, rs []monitor.Result) []monitor.Result {
-	out := []monitor.Result{}
-	if len(t.IPs) == 0 {
-		for _, r := range rs {
-			if len(out) == 0 || r.CheckedAt.After(out[0].CheckedAt) {
-				out = []monitor.Result{r}
+		rs := []monitor.Result{}
+		if len(t.IPs) == 0 {
+			// 호스트명 모드는 주소를 미리 알 수 없어 대상당 한 건뿐인 결과를 그대로 쓴다.
+			for k, r := range found {
+				if k.id == t.ID {
+					rs = append(rs, r)
+				}
+			}
+		} else {
+			for _, a := range t.DialAddresses() {
+				if r, ok := found[key{t.ID, a}]; ok {
+					rs = append(rs, r)
+				}
 			}
 		}
-		return out
+		out[t.ID] = rs
 	}
-	by := make(map[string]monitor.Result, len(rs))
-	for _, r := range rs {
-		by[r.Address] = r
-	}
-	for _, a := range t.DialAddresses() {
-		if r, ok := by[a]; ok {
-			out = append(out, r)
-		}
-	}
-	return out
+	return out, nil
 }
 
 func (s *Store) ResultHistory(ctx context.Context, targetID int64, limit int) ([]monitor.Result, error) {

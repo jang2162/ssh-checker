@@ -182,6 +182,30 @@ func TestLatestResultsHostnameMode(t *testing.T) {
 	}
 }
 
+// IP 모드와 호스트명 모드 대상을 한 번의 호출로 조회해도 각자 맞는 최신 행을 받는다.
+func TestLatestResultsMixedTargets(t *testing.T) {
+	st, _ := newStore(t)
+	d := mustDomain(t, st, "a.com")
+	ipTg := mustTarget(t, st, d.ID, "www.a.com", "10.0.0.1", "10.0.0.2")
+	hostTg := mustTarget(t, st, d.ID, "api.a.com")
+	save(t, st, ipTg.ID,
+		okResult("10.0.0.1:443", t0.Add(-2*time.Hour), "old1"), okResult("10.0.0.1:443", t0, "new1"),
+		okResult("10.0.0.2:443", t0.Add(-time.Hour), "new2"))
+	save(t, st, hostTg.ID,
+		okResult("192.0.2.1:443", t0.Add(-time.Hour), "h1"), okResult("192.0.2.2:443", t0, "h2"))
+	latest, err := st.LatestResults(context.Background(), []store.Target{hostTg, ipTg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := latest[ipTg.ID]
+	if len(l) != 2 || l[0].Address != "10.0.0.1:443" || l[0].Serial != "new1" || l[1].Address != "10.0.0.2:443" || l[1].Serial != "new2" {
+		t.Fatalf("ip target = %+v", l)
+	}
+	if h := latest[hostTg.ID]; len(h) != 1 || h[0].Serial != "h2" {
+		t.Fatalf("host target = %+v", h)
+	}
+}
+
 func TestPruneResults(t *testing.T) {
 	st, _ := newStore(t)
 	ctx := context.Background()

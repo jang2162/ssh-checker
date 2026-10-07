@@ -37,6 +37,23 @@ func (a *API) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/domains/{id}", a.getDomain)
 	mux.HandleFunc("GET /api/targets/{id}/results", a.targetResults)
 	mux.HandleFunc("GET /api/config", a.config)
+
+	// 모든 /api 응답은 JSON이다. 없는 경로는 404, 있는 경로에 GET이 아닌 메서드는 405로 답한다.
+	// 메서드 없는 catch-all이 mux의 405 응답을 가로채므로, 요청을 GET으로 바꿔 경로만 확인한다.
+	probe := http.NewServeMux()
+	for _, p := range []string{"/api/summary", "/api/domains", "/api/domains/{id}", "/api/targets/{id}/results", "/api/config"} {
+		probe.HandleFunc("GET "+p, func(http.ResponseWriter, *http.Request) {})
+	}
+	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
+		get := r.Clone(r.Context())
+		get.Method = http.MethodGet
+		if _, pattern := probe.Handler(get); pattern != "" {
+			w.Header().Set("Allow", "GET, HEAD")
+			httpx.WriteError(w, http.StatusMethodNotAllowed, "method_not_allowed")
+			return
+		}
+		httpx.WriteError(w, http.StatusNotFound, "not_found")
+	})
 }
 
 func (a *API) now() time.Time {

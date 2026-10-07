@@ -319,3 +319,23 @@ func TestConfig(t *testing.T) {
 		t.Fatalf("PUBLIC_URL ignored: %v", m)
 	}
 }
+
+func TestUnknownPathAndMethod(t *testing.T) {
+	f := newFixture(t)
+	rec := f.get("/api/nope")
+	expectError(t, rec, http.StatusNotFound, "not_found")
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Fatalf("content-type = %q", ct)
+	}
+	for _, path := range []string{"/api/domains", "/api/domains/1", "/api/summary", "/api/targets/1/results", "/api/config"} {
+		rec := httptest.NewRecorder()
+		f.h.ServeHTTP(rec, httptest.NewRequest("POST", path, nil))
+		expectError(t, rec, http.StatusMethodNotAllowed, "method_not_allowed")
+	}
+	rec = httptest.NewRecorder()
+	f.h.ServeHTTP(rec, httptest.NewRequest("POST", "/api/nope", nil))
+	expectError(t, rec, http.StatusNotFound, "not_found")
+	if rec := f.get("/api/config"); rec.Code != http.StatusOK {
+		t.Fatalf("config = %d", rec.Code)
+	}
+}

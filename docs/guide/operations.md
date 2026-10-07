@@ -49,7 +49,7 @@ DB를 잃으면 모든 계정이 사라집니다. 그러면 도메인마다 재�
 ```bash
 psql-sslchk -c "SELECT d.fqdn, a.subdomain, a.created_at FROM acme_accounts a JOIN domains d ON d.id = a.domain_id WHERE a.revoked_at IS NULL ORDER BY d.fqdn;"
 psql-sslchk -c "UPDATE acme_accounts SET revoked_at = now() WHERE subdomain = '<subdomain>' AND revoked_at IS NULL;"
-dc restart worker     # 정리 작업을 바로 돌려 챌린지 TXT를 지운다
+dc restart worker     # 정리 작업을 바로 돌려 챌린지 TXT를 지운다(TLS 점검과 CNAME 점검도 바로 한 번 전체를 돈다)
 ```
 
 키를 다시 받으려면 폐기한 뒤 같은 도메인을 [다시 등록](onboarding.md#1-계정-등록)합니다. 재등록하면 `subdomain`이 바뀝니다. 따라서 다음을 모두 다시 해야 합니다.
@@ -69,6 +69,15 @@ worker는 시작할 때 한 번, 그 뒤 24시간마다 챌린지 존을 DB와 �
 - 진행 중인 `/update`와 겹쳐도 계정 단위 잠금을 거치므로 발급 중인 값을 지우지 않습니다.
 
 결과는 worker 로그(`dc logs worker`)와 감사 로그의 `txt_cleanup` 행으로 확인합니다.
+
+worker를 재시작하면 TLS 점검과 CNAME 점검도 시작 즉시 전체를 한 번 돌립니다.
+
+### 네트워크 요구 사항
+
+TLS 점검과 CNAME 점검을 하려면 worker에서 다음 연결이 나갈 수 있어야 합니다.
+
+- 모니터링 대상 전체로 나가는 TCP. 대상에 적은 내부 IP도 포함합니다.
+- `DNS_RESOLVER`로 나가는 UDP/53.
 
 ## 감사 로그
 
