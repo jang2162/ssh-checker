@@ -107,9 +107,11 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		}
 		h.Log.Error("update txt", "subdomain", acct.Subdomain, "err", err)
 		h.audit(ctx, store.AuditEntry{Actor: actor, Action: "update_failed", Target: target, SourceIP: ip.String(), Detail: detail})
+		h.recordUpdate(ctx, acct.ID, false)
 		httpx.WriteError(w, http.StatusInternalServerError, code)
 	default:
 		h.audit(ctx, store.AuditEntry{Actor: actor, Action: "update", Target: target, SourceIP: ip.String()})
+		h.recordUpdate(ctx, acct.ID, true)
 		httpx.WriteJSON(w, http.StatusOK, map[string]string{"txt": req.TXT})
 	}
 }
@@ -183,6 +185,13 @@ func (h *Handler) health(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) audit(ctx context.Context, e store.AuditEntry) {
 	if err := h.Svc.Store.Audit(context.WithoutCancel(ctx), e); err != nil {
 		h.Log.Error("audit", "action", e.Action, "err", err)
+	}
+}
+
+// recordUpdate는 대시보드에 보여 줄 TXT 갱신 상태를 남긴다. 실패해도 응답은 바꾸지 않는다.
+func (h *Handler) recordUpdate(ctx context.Context, accountID int64, ok bool) {
+	if err := h.Svc.Store.RecordUpdateResult(context.WithoutCancel(ctx), accountID, ok); err != nil {
+		h.Log.Error("record update result", "account", accountID, "err", err)
 	}
 }
 

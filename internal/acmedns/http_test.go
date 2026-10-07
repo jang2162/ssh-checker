@@ -452,3 +452,50 @@ func TestUpdateAuditSurvivesClientDisconnect(t *testing.T) {
 		t.Fatalf("subdomain_mismatch actors = %v", got)
 	}
 }
+
+func (f *fixture) acmeState(domain string) store.ACMEState {
+	f.t.Helper()
+	states, err := store.New(f.pool).ActiveACMEStates(context.Background())
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	for _, s := range states {
+		if s.Domain == domain {
+			return s
+		}
+	}
+	f.t.Fatalf("no acme state for %s", domain)
+	return store.ACMEState{}
+}
+
+func TestUpdateRecordsACMEState(t *testing.T) {
+	f := newFixture(t, fixtureOpts{})
+	reg := f.register("a.com")
+	expect(t, f.do(updateReq(reg, txt('a'))), http.StatusOK, map[string]string{"txt": txt('a')})
+	if s := f.acmeState("a.com"); s.LastUpdateAt == nil || s.ConsecutiveFailures != 0 || s.LastFailureAt != nil {
+		t.Fatalf("after success = %+v", s)
+	}
+
+	f.mem.SetFailure(errors.New("cloudflare down"))
+	for range 3 {
+		expect(t, f.do(updateReq(reg, txt('b'))), http.StatusInternalServerError, map[string]string{"error": "dns_provider_error"})
+	}
+	if s := f.acmeState("a.com"); s.ConsecutiveFailures != 3 || s.LastFailureAt == nil {
+		t.Fatalf("after failures = %+v", s)
+	}
+
+	f.mem.SetFailure(nil)
+	expect(t, f.do(updateReq(reg, txt('b'))), http.StatusOK, map[string]string{"txt": txt('b')})
+	if s := f.acmeState("a.com"); s.ConsecutiveFailures != 0 {
+		t.Fatalf("after recovery = %+v", s)
+	}
+}
+
+func TestUpdateRejectedValueIsNotAFailure(t *testing.T) {
+	f := newFixture(t, fixtureOpts{})
+	reg := f.register("a.com")
+	expect(t, f.do(updateReq(reg, "short")), http.StatusBadRequest, map[string]string{"error": "bad_txt"})
+	if s := f.acmeState("a.com"); s.ConsecutiveFailures != 0 || s.LastFailureAt != nil {
+		t.Fatalf("bad_txt counted as failure: %+v", s)
+	}
+}
