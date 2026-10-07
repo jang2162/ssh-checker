@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { AppProvider } from "./app/context.tsx";
 import { Layout } from "./components/Layout.tsx";
+import { Audit } from "./pages/Audit.tsx";
 import { Dashboard } from "./pages/Dashboard.tsx";
 import { DomainDetail } from "./pages/DomainDetail.tsx";
 import { NotFound } from "./pages/NotFound.tsx";
@@ -16,6 +17,7 @@ createRoot(document.getElementById("root")!).render(
           <Route element={<Layout />}>
             <Route index element={<Dashboard />} />
             <Route path="domains/:id" element={<DomainDetail />} />
+            <Route path="audit" element={<Audit />} />
             <Route path="*" element={<NotFound />} />
           </Route>
         </Routes>
