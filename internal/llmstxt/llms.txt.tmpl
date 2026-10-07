@@ -1,0 +1,181 @@
+# ssl-checker
+
+> 인증서 모니터링 서버입니다. 부가 기능으로 acme-dns 호환 DNS-01 검증 대행(CNAME 위임)을 제공합니다. DNS API가 없는 도메인도 acme.sh로 와일드카드를 포함한 Let's Encrypt 인증서를 발급하고 갱신할 수 있습니다.
+
+이 문서는 에이전트가 이 서버로 ACME를 구성할 때 그대로 따라 할 절차입니다.
+
+- 서버 주소: {{.BaseURL}}
+- 챌린지 존: {{.Zone}} (챌린지 TXT는 `<uuid>.{{.Zone}}`에 기록됩니다)
+
+## 동작 방식
+
+1. 도메인마다 `_acme-challenge.<도메인>`에 CNAME을 **한 번** 등록합니다. 대상은 이 서버가 정해 주는 `<uuid>.{{.Zone}}`입니다. 도메인의 DNS는 이 한 줄 말고는 건드리지 않습니다.
+2. 인증서를 받을 서버에서 acme.sh가 Let's Encrypt에서 받은 TXT 값을 이 서버의 `/update`로 보냅니다. acme.sh의 `dns_acmedns` 플러그인이 알아서 합니다.
+3. 이 서버가 `<uuid>.{{.Zone}}`에 TXT를 기록합니다(최근 값 2개 유지: `a.com`과 `*.a.com`을 한 인증서로 받을 때 둘 다 필요합니다). Let's Encrypt가 CNAME을 따라가 TXT를 확인합니다.
+4. 인증서와 개인키는 각 서버의 acme.sh가 만들고 보관합니다. 이 서버는 개인키를 보지 않습니다.
+
+## 관리자 인증
+
+관리 API는 관리자 키(`ADMIN_KEY`)가 필요합니다. 헤더에 `Authorization: Bearer <ADMIN_KEY>`를 넣습니다.
+
+- 키는 사람이 제공해야 합니다. 만들어 내거나 추측하지 마세요.
+- 틀린 키는 IP당 5번까지 받고, 그 뒤로는 12초에 1번만 받습니다(429 `too_many_attempts`).
+- 쓰기 요청(POST, PATCH, DELETE)에는 본문이 없어도 `Content-Type: application/json` 헤더가 필요합니다(없으면 415).
+- 상태 조회(GET)는 키 없이 됩니다. 오류 응답은 `{"error":"<코드>"}` 형태입니다.
+
+아래 예시는 `ADMIN_KEY` 환경변수가 있다고 가정합니다.
+
+```sh
+A="Authorization: Bearer $ADMIN_KEY"
+J="Content-Type: application/json"
+```
+
+## ACME 구성 절차
+
+### 1. 도메인 등록
+
+```sh
+curl -sS -X POST {{.BaseURL}}/api/domains -H "$A" -H "$J" -d '{"fqdn":"a.com"}'
+```
+
+응답의 `id`를 이후 단계에서 `<id>`로 씁니다. 이미 등록돼 있으면 409 `domain_exists`입니다. 그때는 `curl -sS {{.BaseURL}}/api/domains`에서 `fqdn`이 같은 항목의 `id`를 찾습니다. 도메인은 `a.com`처럼 와일드카드 없이 씁니다. `*.a.com`도 같은 CNAME으로 처리됩니다.
+
+### 2. ACME 켜기
+
+```sh
+curl -sS -X POST {{.BaseURL}}/api/domains/<id>/acme -H "$A" -H "$J" -d '{"allowfrom":["203.0.113.10/32"]}'
+```
+
+`allowfrom`은 `/update`를 부를 수 있는 서버의 IP나 CIDR입니다(최대 64개). 키가 새어도 다른 곳에서는 못 쓰게 가능한 한 지정합니다. 빈 목록 `[]`이면 어디서든 부를 수 있습니다.
+
+응답(201)에는 `username`, `password`, `subdomain`, `fulldomain`, `cname_record`, `allowfrom`, `acme_sh`가 있습니다.
+
+- **`password`는 이 응답에서만 볼 수 있습니다.** 다시 얻을 방법이 없고, 잃어버리면 키를 재발급합니다.
+- 응답을 로그, 티켓, 채팅에 남기지 마세요.
+- `acme_sh`는 3~4단계에서 쓸 명령입니다.
+- 이미 켜져 있으면 409 `acme_enabled`입니다.
+
+### 3. CNAME 등록과 확인
+
+응답의 `cname_record`를 도메인(`a.com`)의 DNS에 등록합니다. 레코드 한 줄입니다.
+
+```text
+_acme-challenge.a.com.  CNAME  <uuid>.{{.Zone}}.
+```
+
+DNS 콘솔에서 하는 일이라 사람이 해야 할 수 있습니다. 등록한 뒤 확인합니다.
+
+```sh
+curl -sS -X POST {{.BaseURL}}/api/domains/<id>/acme/check -H "$A" -H "$J"
+```
+
+응답의 `cname_status`가 `ok`면 됩니다.
+
+| `cname_status` | 뜻 |
+| --- | --- |
+| `ok` | CNAME이 이 서버가 정해 준 이름을 가리킵니다 |
+| `missing` | CNAME이 없습니다. DNS 전파에 몇 분 걸릴 수 있으니 기다린 뒤 다시 확인합니다 |
+| `mismatch` | 다른 곳을 가리킵니다. `cname_record`와 값이 같은지 봅니다 |
+| `error` | 조회에 실패했습니다. 잠시 뒤 다시 확인합니다 |
+
+### 4. 인증서를 받을 서버에서 발급
+
+acme.sh 3.1.4 이상이 필요합니다. 없으면 `curl https://get.acme.sh | sh -s email=<연락 이메일>`로 설치합니다. 2단계 응답의 `acme_sh`에 아래 명령이 값이 채워진 채로 들어 있습니다.
+
+```sh
+export ACMEDNS_BASE_URL="{{.BaseURL}}"
+export ACMEDNS_USERNAME="<username>"
+read -rs ACMEDNS_PASSWORD && export ACMEDNS_PASSWORD   # 비밀번호가 셸 기록에 남지 않게 입력으로 받는다
+export ACMEDNS_SUBDOMAIN="<subdomain>"
+~/.acme.sh/acme.sh --set-default-ca --server letsencrypt
+```
+
+처음 연결하는 도메인은 **스테이징으로 먼저** 확인합니다. 운영 CA의 발급 횟수 제한에 걸리지 않습니다.
+
+```sh
+~/.acme.sh/acme.sh --issue --staging --dns dns_acmedns -d a.com -d '*.a.com'
+# "Cert success."가 나오면 스테이징 인증서를 지운다
+~/.acme.sh/acme.sh --remove -d a.com --ecc
+rm -rf ~/.acme.sh/a.com_ecc
+```
+
+운영 발급과 설치입니다.
+
+```sh
+~/.acme.sh/acme.sh --issue --dns dns_acmedns -d a.com -d '*.a.com'
+sudo mkdir -p /etc/ssl/a.com
+~/.acme.sh/acme.sh --install-cert -d a.com --ecc \
+  --key-file       /etc/ssl/a.com/key.pem \
+  --fullchain-file /etc/ssl/a.com/fullchain.pem \
+  --reloadcmd      "sudo systemctl reload nginx"
+```
+
+갱신은 acme.sh가 설치한 cron이 알아서 합니다. 처음 발급이 끝나면 자격 증명이 acme.sh 설정에 저장되므로, 환경변수는 다시 설정하지 않아도 됩니다.
+
+### 5. 확인과 모니터링 등록
+
+```sh
+curl -sS {{.BaseURL}}/api/domains/<id>
+```
+
+`acme.last_update_at`이 채워지고 `acme.consecutive_failures`가 0이면 TXT 갱신이 되고 있는 것입니다.
+
+이 도메인의 인증서를 계속 점검하려면 모니터링 대상을 추가합니다. 응답에 즉시 점검한 결과가 들어 있습니다.
+
+```sh
+curl -sS -X POST {{.BaseURL}}/api/domains/<id>/targets -H "$A" -H "$J" \
+  -d '{"hostname":"www.a.com","port":443,"ips":["203.0.113.10"]}'
+```
+
+- `ips`를 생략하면 호스트명으로 한 번만 접속합니다(DNS가 여러 주소를 줘도 하나만 점검). 서버마다 같은 인증서가 깔렸는지 보려면 `ips`에 서버 IP를 모두 적습니다(최대 16개).
+- 다시 점검하려면 `POST {{.BaseURL}}/api/targets/<target_id>/check`를 부릅니다.
+- 서버는 이후 주기적으로 모든 대상을 점검합니다.
+
+## 키 재발급, 허용 IP 변경, 끄기
+
+| 하려는 일 | 호출 |
+| --- | --- |
+| 키 재발급 | `POST /api/domains/<id>/acme/rotate` (200, 일회성 자격 증명). 서브도메인과 CNAME은 그대로이고 옛 키는 즉시 무효입니다 |
+| 허용 IP 변경 | `PATCH /api/domains/<id>/acme` `{"allowfrom":["203.0.113.0/24"]}` |
+| 끄기 | `DELETE /api/domains/<id>/acme` (204). 챌린지 TXT를 지웁니다. 다시 켜면 서브도메인이 새로 생겨 CNAME을 다시 걸어야 합니다 |
+
+**키를 재발급하면 서버에서 `--issue ... --force`를 다시 실행해야 합니다.** 재발급 응답의 `acme_sh`에 들어 있습니다. 그렇게 하지 않으면 acme.sh 설정에 옛 키가 남아, 다음 자동 갱신이 401로 실패합니다.
+
+## 상태 판정
+
+도메인 상태는 대상과 ACME 상태 중 가장 나쁜 것입니다. 나쁜 순서는 `critical` > `warning` > `info` > `ok` > `unknown`입니다.
+
+| 코드 | 상태 | 뜻 |
+| --- | --- | --- |
+{{- range .Codes}}
+| `{{.Code}}` | {{.Status}} | {{.Meaning}} |
+{{- end}}
+
+## 흔한 오류와 해결
+
+- **`/update`가 401 `forbidden`:** username이나 password가 틀렸거나, 키를 재발급한 뒤 옛 키를 쓰고 있거나, 호출한 서버의 IP가 `allowfrom`에 없을 때입니다. ACME를 끈 도메인의 계정도 401입니다. 이 서버가 프록시 뒤에 있으면 관리자에게 `TRUSTED_PROXIES` 설정을 확인해 달라고 합니다.
+- **`/update`가 400 `bad_txt`:** TXT 값이 43자 `[A-Za-z0-9_-]` 형식이 아닙니다. acme.sh가 아닌 도구로 직접 호출했을 때 생깁니다.
+- **`/update`가 429 `rate_limited`:** 계정별 호출 빈도 제한입니다(처음 10번, 이후 6초에 1번). 잠시 뒤 다시 시도합니다.
+- **`/update`가 500 `dns_provider_error`:** 이 서버가 DNS 공급자를 호출하지 못했습니다. 서버 관리자에게 `{{.BaseURL}}/health`를 확인해 달라고 합니다.
+- **Let's Encrypt 검증 실패:** `acme/check`로 `cname_status`가 `ok`인지 먼저 봅니다. 도메인에 CAA 레코드가 있으면 `letsencrypt.org`를 허용해야 합니다.
+- **`CNAME_MISMATCH`:** ACME를 껐다 다시 켜면 서브도메인이 바뀝니다. 새 `cname_record`의 값으로 CNAME을 고칩니다.
+- **acme.sh가 "Skipping. Next renewal time is"를 출력:** 이미 발급된 인증서가 있어서 건너뛴 것입니다. 새 키를 저장해야 하면 `--force`를 붙입니다.
+
+## 모니터링 API
+
+조회는 키가 필요 없습니다.
+
+- `GET {{.BaseURL}}/api/summary`: 상태별 도메인 수
+- `GET {{.BaseURL}}/api/domains?status=critical`: 도메인 목록(상태 필터 선택)
+- `GET {{.BaseURL}}/api/domains/<id>`: 대상·접속 주소별 점검 결과와 ACME 상태
+- `GET {{.BaseURL}}/api/targets/<target_id>/results?limit=50`: 점검 이력
+- `GET {{.BaseURL}}/api/codes`: 위 상태 코드 표(JSON)
+
+관리자 전용: `PATCH /api/domains/<id>`(메모), `DELETE /api/domains/<id>`(도메인 삭제, ACME가 켜져 있으면 먼저 끄고 TXT를 지웁니다), `PATCH`·`DELETE /api/targets/<target_id>`, `GET /api/audit`(감사 로그).
+
+## 하지 말 것
+
+- `ADMIN_KEY`와 ACME `password`를 로그, 티켓, 채팅, 저장소에 남기지 않습니다.
+- 운영 CA로 발급 시험을 반복하지 않습니다. 먼저 `--staging`으로 확인합니다.
+- 도메인의 DNS는 `_acme-challenge` CNAME 한 줄 말고는 바꾸지 않습니다.
+- `allowfrom`을 비워 두지 않습니다.
