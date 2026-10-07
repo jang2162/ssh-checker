@@ -1,17 +1,16 @@
 #!/bin/sh
-# 이미지를 빌드하고 compose 스택(memory 공급자)을 띄워 register → update → health를 확인한다.
+# compose 스택(memory 공급자)을 저장소에서 빌드해 띄우고 register → update → health를 확인한다.
 set -eu
 cd "$(dirname "$0")/.."
 
 ENV_FILE=deploy/local.env.example
 # shellcheck disable=SC1090
 . "./$ENV_FILE"
-COMPOSE="docker compose -p sslchk-smoke -f deploy/compose.yaml --env-file $ENV_FILE"
+COMPOSE="docker compose -p sslchk-smoke -f deploy/compose.yaml -f deploy/compose.ports.yaml --env-file $ENV_FILE"
 BASE="http://${BIND_ADDR}:${API_PORT}"
 
-docker build -t "${IMAGE}:${APP_VERSION}" .
 trap '$COMPOSE down -v >/dev/null 2>&1' EXIT
-$COMPOSE up -d
+$COMPOSE up -d --build
 
 i=0
 until [ "$($COMPOSE ps api --format '{{.Health}}')" = "healthy" ]; do

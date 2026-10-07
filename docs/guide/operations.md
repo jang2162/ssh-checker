@@ -1,9 +1,9 @@
 # 운영
 
-아래 명령은 [설치](installation.md)대로 `deploy/.env`와 프로젝트 이름 `ssl-checker`로 띄웠다고 가정합니다. 편의를 위해 별칭을 둡니다.
+아래 명령은 [설치](installation.md)대로 `deploy/.env`와 프로젝트 이름 `ssl-checker`로 띄웠다고 가정합니다. 편의를 위해 별칭을 둡니다. 호스트 포트로 열었다면 `compose.caddy.yaml`을 `compose.ports.yaml`로 바꿉니다. Komodo로 배포했다면 Komodo UI에서 같은 작업을 하거나, 서버의 Stack 디렉터리에서 실행합니다.
 
 ```bash
-alias dc='docker compose -p ssl-checker -f deploy/compose.yaml --env-file deploy/.env'
+alias dc='docker compose -p ssl-checker -f deploy/compose.yaml -f deploy/compose.caddy.yaml --env-file deploy/.env'
 alias psql-sslchk='dc exec db psql -U sslchk -d sslchk'
 ```
 
@@ -11,12 +11,10 @@ alias psql-sslchk='dc exec db psql -U sslchk -d sslchk'
 
 ```bash
 git pull
-docker build -t ssl-checker:1.1.0 .
-# deploy/.env의 APP_VERSION=1.1.0으로 바꾼 뒤
-dc up -d
+dc up -d --build
 ```
 
-`migrate`가 먼저 새 마이그레이션을 적용하고, 성공해야 api와 worker가 새 버전으로 시작합니다. api와 worker가 분리돼 있어, api를 재시작하는 동안에도 이미 발급된 인증서에는 영향이 없습니다. 갱신 중이던 서버는 acme.sh가 다음 cron 실행 때 재시도합니다.
+compose가 새 소스로 이미지를 다시 빌드합니다. `migrate`가 먼저 새 마이그레이션을 적용하고, 성공해야 api와 worker가 새 버전으로 시작합니다. api와 worker가 분리돼 있어, api를 재시작하는 동안에도 이미 발급된 인증서에는 영향이 없습니다. 갱신 중이던 서버는 acme.sh가 다음 cron 실행 때 재시도합니다.
 
 ## 백업과 복원
 
@@ -99,7 +97,7 @@ psql-sslchk -c "DELETE FROM audit_logs WHERE at < now() - interval '1 year';"
 ## 상태 확인
 
 ```bash
-curl -s http://<BIND_ADDR>:<API_PORT>/health    # {"db":"ok","provider":"ok"}
+curl -s <앱>/health                             # {"db":"ok","provider":"ok"}
 dc ps                                           # api가 healthy인지
 dc logs --since 24h api worker                  # JSON 로그
 ```

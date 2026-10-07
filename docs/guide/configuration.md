@@ -8,17 +8,15 @@ ssl-checker는 모든 설정을 환경변수로 받습니다. `deploy/compose.ya
 
 | 변수 | 설명 | 사용 서비스 | 기본값·예시 | 구분 |
 | --- | --- | --- | --- | --- |
-| `IMAGE` | 실행할 이미지 이름. 로컬 빌드면 `ssl-checker`, 레지스트리면 전체 경로 | 전체 | `registry.example.com/ssl-checker` | 필수 |
-| `APP_VERSION` | 이미지 태그. 업데이트할 때 이 값만 바꿔 재배포합니다. | 전체 | `1.0.0` | 필수 |
-| `BIND_ADDR` | api 포트를 열 호스트 IP. 인증서를 받을 서버들만 닿는 내부 인터페이스 주소를 넣습니다. 비우면 모든 인터페이스에 열리므로 compose가 막습니다. | api | `10.0.0.5` | 필수 |
-| `API_PORT` | api를 열 호스트 포트 | api | `8080` | 선택 |
+| `BIND_ADDR` | api 포트를 열 호스트 IP. 인증서를 받을 서버들만 닿는 내부 인터페이스 주소를 넣습니다. 비우면 모든 인터페이스에 열리므로 compose가 막습니다. | api | `10.0.0.5` | 조건부 (`compose.ports.yaml`을 쓸 때 필수) |
+| `API_PORT` | api를 열 호스트 포트 | api | `8080` | 선택 (`compose.ports.yaml`을 쓸 때만) |
+| `CADDY_NETWORK` | Caddy 컨테이너가 붙어 있는 외부 Docker 네트워크 이름. api만 이 네트워크에 붙습니다. | api | `caddy` | 선택 (`compose.caddy.yaml`을 쓸 때만) |
 | `TRUSTED_PROXIES` | `X-Forwarded-For`를 믿을 리버스 프록시 주소. 쉼표로 구분한 CIDR이나 IP. 아래 [네트워크와 프록시](#네트워크와-프록시)를 꼭 읽습니다. | api | 비움 | 선택 |
 | `DNS_PROVIDER` | TXT를 기록할 공급자. `cloudflare` 또는 `memory`. `memory`는 테스트용이며 실제 DNS에 기록하지 않습니다. | api, worker | `cloudflare` | 필수 |
-| `CHALLENGE_ZONE` | 챌린지 TXT를 둘 전용 존. 각 도메인의 CNAME이 가리키는 곳이라 처음에 확정합니다. 대소문자와 끝의 점은 무시합니다. | api, worker | `acme-chk.example` | 필수 |
+| `CHALLENGE_ZONE` | 챌린지 TXT를 둘 이름. 레코드는 `<uuid>.<CHALLENGE_ZONE>`으로 생깁니다. 전용 존 이름이나 기존 존의 하위 이름(예: `acme.example.com`)을 씁니다. 각 도메인의 CNAME이 가리키는 곳이라 처음에 확정합니다. 대소문자와 끝의 점은 무시합니다. | api, worker | `acme.example.com` | 필수 |
 | `CF_API_TOKEN` | 전용 존의 `Zone > DNS > Edit` 권한만 가진 Cloudflare 토큰 | api, worker | | 조건부 (`cloudflare`일 때 필수) |
-| `CF_ZONE_ID` | 전용 존의 Zone ID. 비우면 존 이름으로 조회합니다. 존 단위 토큰은 조회 권한이 없을 수 있으므로 넣는 것을 권장합니다. | api, worker | | 선택 |
+| `CF_ZONE_ID` | 챌린지 TXT를 둘 Cloudflare 존의 Zone ID. 비우면 `CHALLENGE_ZONE`을 존 이름으로 보고 조회합니다. **`CHALLENGE_ZONE`이 하위 이름이면 필수**이고, 존 단위 토큰은 조회 권한이 없을 수 있으므로 항상 넣는 것을 권장합니다. | api, worker | | 조건부 |
 | `TXT_TTL` | 챌린지 TXT의 TTL(초, 1~86400). Cloudflare는 60 미만이면 60으로 올려 기록합니다. | api, worker | `60` | 선택 |
-| `CHECK_INTERVAL` | TLS 점검 주기. 아직 구현되지 않은 모니터링 기능용이며 지금은 읽지 않습니다. | worker | `6h` | 선택 |
 | `ADMIN_KEY` | `/register`의 Bearer 키. 32바이트 이상이어야 api가 시작합니다. | api | `openssl rand -hex 32` | 필수 |
 | `POSTGRES_PASSWORD` | DB 비밀번호. compose가 이 값으로 `DATABASE_URL`을 만들어 넘기므로 URL에 그대로 쓸 수 있는 문자만 씁니다. | 전체 | `openssl rand -hex 24` | 필수 |
 
@@ -40,6 +38,33 @@ compose 없이 실행할 때는 역할마다 아래 변수를 넣습니다.
 | `ssl-checker healthcheck --url http://127.0.0.1:8080/health` | 없음 |
 
 설정이 잘못되면 프로세스가 문제 있는 변수 이름을 모두 출력하고 종료합니다.
+
+## api를 여는 방법
+
+`compose.yaml`만으로는 api를 바깥에 열지 않습니다. 둘 중 하나를 골라 compose 파일을 하나 더 붙입니다.
+
+| 방법 | 붙일 파일 | 필요한 변수 | 클라이언트가 부르는 주소 |
+| --- | --- | --- | --- |
+| 호스트 포트로 직접 열기 | `compose.ports.yaml` | `BIND_ADDR`, (`API_PORT`) | `http://<BIND_ADDR>:<API_PORT>` |
+| Caddy 뒤에 두기 (포트 미공개) | `compose.caddy.yaml` | `CADDY_NETWORK`, `TRUSTED_PROXIES` | Caddy에 설정한 주소 (예: `https://ssl-checker.example.com`) |
+
+어느 쪽이든 이 주소로 들어오는 호출은 세 가지입니다. 각 서버 acme.sh의 `/update`, 관리자의 `/register`, 모니터링의 `/health`입니다. 컨테이너 헬스체크는 컨테이너 안에서 돌기 때문에 포트가 필요 없습니다.
+
+### Caddy 뒤에서 돌릴 때
+
+Caddy가 같은 서버에서 컨테이너로 돌고, 다른 서비스들과 공유하는 Docker 네트워크(예: `caddy`)가 있다고 가정합니다.
+
+1. **compose 파일**: `compose.yaml` + `compose.caddy.yaml`. api는 호스트 포트를 열지 않고 `CADDY_NETWORK`에 별칭 `ssl-checker-api`로 붙습니다. db·migrate·worker는 이 네트워크에 붙지 않습니다.
+2. **Caddyfile**: [`deploy/Caddyfile.example`](../../deploy/Caddyfile.example)처럼 `reverse_proxy ssl-checker-api:8080`으로 넘깁니다. 인증 기관은 이 API를 호출하지 않으므로, `remote_ip`로 내부 대역만 통과시키고 나머지는 막습니다. **Caddy가 인터넷에 열려 있다면 이 제한은 꼭 둡니다.**
+3. **`TRUSTED_PROXIES`에 Caddy의 주소를 넣습니다.** 비워 두면 모든 요청이 Caddy에서 온 것으로 보입니다. 그러면 `allowfrom`이 동작하지 않고, 인증 실패 제한도 모든 서버가 함께 받습니다. Caddy는 `X-Forwarded-For`에 실제 클라이언트 IP를 넣어 보내고, ssl-checker는 `TRUSTED_PROXIES`에서 온 요청에 한해 그 값을 씁니다.
+   - **권장: Caddy 컨테이너 IP를 고정하고 그 IP 하나만 넣습니다.** Caddy의 compose에서 네트워크에 `ipv4_address`를 지정하면 됩니다.
+   - 고정하지 않으면 Caddy 네트워크의 서브넷을 넣습니다. 서브넷은 `docker network inspect caddy --format '{{(index .IPAM.Config 0).Subnet}}'`로 확인합니다. 다만 이 경우 **같은 네트워크의 다른 컨테이너도 `X-Forwarded-For`로 IP를 꾸밀 수 있습니다.** 그 네트워크에 믿을 수 있는 컨테이너만 있을 때만 씁니다.
+4. **HTTPS 주소를 씁니다.** 이제 클라이언트 서버의 `ACMEDNS_BASE_URL`은 Caddy 주소(예: `https://ssl-checker.example.com`)입니다.
+   - 공인 도메인이면 Caddy가 인증서를 자동으로 받습니다.
+   - `tls internal`처럼 사설 인증서를 쓰면, 각 서버가 Caddy의 루트 인증서를 신뢰해야 acme.sh(curl)가 접속합니다.
+5. **확인**: 일부러 틀린 키로 `/update`를 한 번 보낸 뒤 감사 로그의 `source_ip`를 봅니다. **Caddy 컨테이너 IP가 아니라 호출한 서버의 IP**가 찍혀야 합니다.
+
+Caddy 앞에 로드밸런서나 Cloudflare 프록시가 또 있다면, Caddy의 `trusted_proxies`도 설정해야 원래 클라이언트 IP가 전달됩니다.
 
 ## 네트워크와 프록시
 

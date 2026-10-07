@@ -183,3 +183,32 @@ func TestRealCloudflare(t *testing.T) {
 	}
 	providertest.Run(t, New(Config{Token: token, Zone: zone, ZoneID: os.Getenv("CF_TEST_ZONE_ID")}), zone)
 }
+
+// 챌린지 이름이 존 이름의 하위 이름(acme.<존>)이어도 CF_ZONE_ID로 그 존 안에 기록하고,
+// 목록은 하위 이름 아래만 돌려준다.
+func TestSubdomainChallengeZone(t *testing.T) {
+	f := newFakeCF(t)
+	ctx := context.Background()
+	sub := "acme." + f.zoneName
+	p := New(Config{Token: f.token, Zone: sub, ZoneID: f.zoneID, BaseURL: f.srv.URL})
+	if err := p.Check(ctx); err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	other := New(Config{Token: f.token, Zone: f.zoneName, ZoneID: f.zoneID, BaseURL: f.srv.URL})
+	if err := other.SetTXT(ctx, "www."+f.zoneName, []string{v('w')}, 60); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.SetTXT(ctx, "x."+sub, []string{v('a')}, 60); err != nil {
+		t.Fatal(err)
+	}
+	recs, err := p.ListTXT(ctx, sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 1 || recs[0].FQDN != "x."+sub || recs[0].Value != v('a') {
+		t.Fatalf("ListTXT(%s) = %+v, want only x.%s", sub, recs, sub)
+	}
+	if got := f.values("www." + f.zoneName); !slices.Equal(got, []string{v('w')}) {
+		t.Fatalf("record outside the challenge name changed: %v", got)
+	}
+}

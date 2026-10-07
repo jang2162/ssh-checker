@@ -1,10 +1,14 @@
-# Komodo Stack 정의 (저장소 모드).
-# Komodo가 이 저장소를 clone해 deploy/에서 이미지를 빌드하고 compose로 배포한다. 레지스트리가 필요 없다.
+# Komodo Stack 정의 (저장소 모드, Caddy 뒤에서 실행).
+# Komodo가 이 저장소를 clone해 deploy/에서 compose로 배포한다. 이미지는 compose가 저장소의 Dockerfile로 직접 빌드한다.
+# api는 호스트 포트를 열지 않고, Caddy 컨테이너가 붙어 있는 Docker 네트워크에만 연결된다.
 #
 # 쓰는 방법 (docs/guide/installation.md의 「Komodo로 배포」 참고):
 #   - UI로 만들 때: 아래 값을 Stack 설정 화면에 그대로 옮긴다.
 #   - Resource Sync로 만들 때: 이 파일을 resource_path로 지정한다.
 # 아래 <...>와 server 값은 환경에 맞게 바꾼다.
+#
+# Caddy 없이 호스트 포트로 열려면 file_paths의 compose.caddy.yaml을 compose.ports.yaml로 바꾸고,
+# environment의 CADDY_NETWORK 대신 BIND_ADDR(필수)와 API_PORT를 넣는다.
 
 [[stack]]
 name = "ssl-checker"
@@ -12,19 +16,20 @@ description = "DNS-01 검증 대행 서버 (acme-dns 호환 API)"
 [stack.config]
 server = "<배포할 Komodo Server 이름>"
 
-# 저장소: Komodo가 매 배포마다 이 브랜치를 clone/pull 한다.
-git_provider = "gitlab.kbrainc.dev"
-repo = "util/ssh-checker"
+# 저장소: Komodo가 매 배포마다 이 브랜치를 clone/pull 한다. (UI: Choose Mode = Git Repo)
+# git_provider는 저장소를 둔 Git 서버 도메인(GitHub이면 github.com), repo는 <조직>/<저장소>.
+git_provider = "git.example.com"
+repo = "<조직>/<저장소>"
 branch = "main"
 # 비공개 저장소면 Komodo에 등록한 Git 계정 이름을 넣는다.
 git_account = "<Komodo Git 계정>"
 
-# 저장소 안에서 compose를 실행할 디렉터리와 파일.
-# compose.build.yaml이 저장소 루트의 Dockerfile로 이미지를 빌드한다.
+# 저장소 안에서 compose를 실행할 디렉터리와 파일. (UI: Files → Run Directory, File Paths)
 run_directory = "deploy"
-file_paths = ["compose.yaml", "compose.build.yaml"]
+file_paths = ["compose.yaml", "compose.caddy.yaml"]
+
 # 배포 전에 docker compose build를 실행한다. UI 이름은 Build Images → "Pre Build Images".
-# 꺼도 compose.build.yaml의 pull_policy: build 때문에 Deploy할 때 빌드된다.
+# 꺼도 compose.yaml의 pull_policy: build 때문에 Deploy할 때 빌드된다.
 run_build = true
 
 # migrate는 마이그레이션 후 정상 종료하는 서비스라 상태 점검에서 뺀다.
@@ -34,16 +39,11 @@ ignore_services = ["migrate"]
 # 비밀값은 [[이름]] 보간으로만 넣고, 실제 값은 Komodo Variables(시크릿)나 Periphery [secrets]에 둔다.
 # 변수 설명: docs/guide/configuration.md
 environment = """
-IMAGE=ssl-checker
-APP_VERSION=main
-BIND_ADDR=<api를 열 내부 IP>
-API_PORT=8080
-TRUSTED_PROXIES=
+CADDY_NETWORK=<Caddy 컨테이너가 붙어 있는 Docker 네트워크 이름>
+TRUSTED_PROXIES=<Caddy 컨테이너 IP>
 DNS_PROVIDER=cloudflare
-CHALLENGE_ZONE=<챌린지 전용 존>
-CF_ZONE_ID=<Cloudflare Zone ID>
-TXT_TTL=60
-CHECK_INTERVAL=6h
+CHALLENGE_ZONE=acme.example.com
+CF_ZONE_ID=<챌린지 TXT를 둘 Cloudflare 존의 Zone ID>
 ADMIN_KEY=[[SSLCHK_ADMIN_KEY]]
 CF_API_TOKEN=[[SSLCHK_CF_API_TOKEN]]
 POSTGRES_PASSWORD=[[SSLCHK_POSTGRES_PASSWORD]]

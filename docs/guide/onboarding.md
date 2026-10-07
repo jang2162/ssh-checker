@@ -2,7 +2,7 @@
 
 `a.com`과 `*.a.com` 인증서를 nginx 서버에서 자동 발급·갱신하는 과정을 예로 듭니다. ssl-checker가 [설치](installation.md)되어 있고, `/health`가 `{"db":"ok","provider":"ok"}`라고 가정합니다.
 
-아래에서 `<앱>`은 `http://<BIND_ADDR>:<API_PORT>`, `<존>`은 `CHALLENGE_ZONE` 값입니다.
+아래에서 `<앱>`은 클라이언트가 부르는 api 주소입니다. 호스트 포트로 열었다면 `http://<BIND_ADDR>:<API_PORT>`, Caddy 뒤라면 Caddy에 설정한 주소(예: `https://ssl-checker.example.com`)입니다. `<존>`은 `CHALLENGE_ZONE` 값입니다.
 
 ## 전체 흐름
 
@@ -86,7 +86,7 @@ curl -fsSL https://get.acme.sh | sh -s email=ops@example.com
 비밀번호는 입력으로 받아 셸 히스토리에 남기지 않습니다.
 
 ```bash
-export ACMEDNS_BASE_URL="<앱>"                        # 예: http://10.0.0.5:8080
+export ACMEDNS_BASE_URL="<앱>"                        # 예: https://ssl-checker.example.com
 export ACMEDNS_USERNAME="<username>"
 read -rs ACMEDNS_PASSWORD && export ACMEDNS_PASSWORD
 export ACMEDNS_SUBDOMAIN="<subdomain>"

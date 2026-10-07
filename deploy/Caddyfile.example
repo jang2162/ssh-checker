@@ -1,0 +1,12 @@
+# ssl-checker를 Caddy 뒤에 둘 때의 예시. 기존 Caddyfile에 블록을 추가한다.
+# api는 compose.caddy.yaml로 Caddy와 같은 Docker 네트워크에 붙고, 별칭 ssl-checker-api로 찾는다.
+#
+# 인증 기관은 이 API를 호출하지 않는다. 인증서를 받을 서버들과 관리자만 닿으면 되므로
+# 내부 대역만 통과시키고 나머지는 403으로 막는다. Caddy가 인터넷에 열려 있다면 꼭 둔다.
+ssl-checker.example.com {
+	@internal remote_ip 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16
+	handle @internal {
+		reverse_proxy ssl-checker-api:8080
+	}
+	respond 403
+}
