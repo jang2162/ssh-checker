@@ -185,3 +185,75 @@ func TestUpdateTXTConcurrent(t *testing.T) {
 		t.Fatalf("db = %v, provider = %v; want the same 2 values", db, prov)
 	}
 }
+
+func TestRotate(t *testing.T) {
+	svc, _, _ := newService(t)
+	ctx := context.Background()
+	reg, acct := registerAndAuth(t, svc, "a.com")
+	rot, err := svc.Rotate(ctx, acct.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rot.Username != reg.Username || rot.Subdomain != reg.Subdomain || rot.FullDomain != reg.FullDomain ||
+		rot.Password == reg.Password || len(rot.Password) != 40 {
+		t.Fatalf("Rotate = %+v (was %+v)", rot, reg)
+	}
+	if _, err := svc.Authenticate(ctx, reg.Username, reg.Password); !errors.Is(err, acmedns.ErrForbidden) {
+		t.Fatalf("old key = %v", err)
+	}
+	if _, err := svc.Authenticate(ctx, rot.Username, rot.Password); err != nil {
+		t.Fatalf("new key = %v", err)
+	}
+	if _, err := svc.Rotate(ctx, 99999); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("missing = %v", err)
+	}
+}
+
+func TestDisable(t *testing.T) {
+	svc, mem, pool := newService(t)
+	ctx := context.Background()
+	reg, acct := registerAndAuth(t, svc, "a.com")
+	if err := svc.UpdateTXT(ctx, acct, txt('a')); err != nil {
+		t.Fatal(err)
+	}
+	if len(mem.Values(reg.FullDomain)) != 1 {
+		t.Fatal("setup: txt not written")
+	}
+	if err := svc.Disable(ctx, acct.ID); err != nil {
+		t.Fatal(err)
+	}
+	if v := mem.Values(reg.FullDomain); len(v) != 0 {
+		t.Fatalf("provider still has %v", v)
+	}
+	if v := dbValues(t, pool); len(v) != 0 {
+		t.Fatalf("db still has %v", v)
+	}
+	if _, err := svc.Authenticate(ctx, reg.Username, reg.Password); !errors.Is(err, acmedns.ErrForbidden) {
+		t.Fatalf("revoked account authenticated: %v", err)
+	}
+	if err := svc.Disable(ctx, acct.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("second disable = %v", err)
+	}
+}
+
+func TestDisableProviderFailureKeepsAccount(t *testing.T) {
+	svc, mem, pool := newService(t)
+	ctx := context.Background()
+	reg, acct := registerAndAuth(t, svc, "a.com")
+	if err := svc.UpdateTXT(ctx, acct, txt('a')); err != nil {
+		t.Fatal(err)
+	}
+	mem.SetFailure(errors.New("cloudflare down"))
+	err := svc.Disable(ctx, acct.ID)
+	var perr *dnsprovider.Error
+	if !errors.As(err, &perr) {
+		t.Fatalf("Disable = %v, want provider error", err)
+	}
+	mem.SetFailure(nil)
+	if _, err := svc.Authenticate(ctx, reg.Username, reg.Password); err != nil {
+		t.Fatalf("account lost after failed disable: %v", err)
+	}
+	if v := dbValues(t, pool); len(v) != 1 {
+		t.Fatalf("db txt = %v", v)
+	}
+}

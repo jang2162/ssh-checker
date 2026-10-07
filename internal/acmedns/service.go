@@ -54,18 +54,14 @@ func (s *Service) Register(ctx context.Context, domain string, allowFrom []netip
 	if !ValidDomain(domain) {
 		return Registration{}, ErrInvalidDomain
 	}
-	password, err := newPassword()
+	password, hash, err := newKey()
 	if err != nil {
 		return Registration{}, err
-	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-	if err != nil {
-		return Registration{}, fmt.Errorf("acmedns: hash key: %w", err)
 	}
 	acct, err := s.Store.CreateAccount(ctx, store.NewAccount{
 		Domain:    domain,
 		Username:  uuid.New(),
-		KeyHash:   string(hash),
+		KeyHash:   hash,
 		Subdomain: uuid.New(),
 		AllowFrom: allowFrom,
 	})
@@ -112,6 +108,47 @@ func (s *Service) UpdateTXT(ctx context.Context, acct store.Account, value strin
 		}
 		return next, nil
 	})
+}
+
+// Rotate는 활성 계정의 키를 새로 만든다. 옛 키는 바로 무효가 되고, username과 서브도메인은 그대로다.
+func (s *Service) Rotate(ctx context.Context, accountID int64) (Registration, error) {
+	password, hash, err := newKey()
+	if err != nil {
+		return Registration{}, err
+	}
+	acct, err := s.Store.RotateKey(ctx, accountID, hash)
+	if err != nil {
+		return Registration{}, err
+	}
+	return Registration{
+		Username:   acct.Username,
+		Password:   password,
+		Subdomain:  acct.Subdomain,
+		FullDomain: s.FQDN(acct.Subdomain),
+		AllowFrom:  acct.AllowFrom,
+	}, nil
+}
+
+// Disable은 계정을 폐기하고 챌린지 TXT를 지운다. 공급자 삭제가 실패하면 계정과 TXT 기록은 그대로 둔다.
+func (s *Service) Disable(ctx context.Context, accountID int64) error {
+	return s.Store.RevokeAccount(ctx, accountID, func(ctx context.Context, subdomain string) error {
+		pctx, cancel := context.WithTimeout(ctx, providerWriteTimeout)
+		defer cancel()
+		return s.Provider.DeleteTXT(pctx, s.FQDN(subdomain))
+	})
+}
+
+// newKey는 평문 키와 그 bcrypt 해시다. 평문은 호출한 곳에서 한 번만 내보낸다.
+func newKey() (password, hash string, err error) {
+	password, err = newPassword()
+	if err != nil {
+		return "", "", err
+	}
+	h, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return "", "", fmt.Errorf("acmedns: hash key: %w", err)
+	}
+	return password, string(h), nil
 }
 
 // newPassword는 40자 무작위 키를 만든다 (원본 acme-dns와 같은 길이).
