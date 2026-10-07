@@ -1,4 +1,4 @@
-// Package adminapi는 대시보드와 에이전트가 쓰는 /api JSON API다. 이 계획에서는 조회만 연다.
+// Package adminapi는 대시보드와 에이전트가 쓰는 /api JSON API다.
 package adminapi
 
 import (
@@ -6,6 +6,8 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -28,27 +30,48 @@ type API struct {
 	IP            httpx.ClientIP
 	Now           func() time.Time
 	Log           *slog.Logger
+	Auth          *Auth // 관리자 확인
 }
 
-// Register는 조회 경로를 mux에 붙인다. 조회는 인증 없이 누구나 할 수 있다.
-func (a *API) Register(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/summary", a.summary)
-	mux.HandleFunc("GET /api/domains", a.listDomains)
-	mux.HandleFunc("GET /api/domains/{id}", a.getDomain)
-	mux.HandleFunc("GET /api/targets/{id}/results", a.targetResults)
-	mux.HandleFunc("GET /api/config", a.config)
+type route struct {
+	method, pattern string
+	h               http.HandlerFunc
+}
 
-	// 모든 /api 응답은 JSON이다. 없는 경로는 404, 있는 경로에 GET이 아닌 메서드는 405로 답한다.
-	// 메서드 없는 catch-all이 mux의 405 응답을 가로채므로, 요청을 GET으로 바꿔 경로만 확인한다.
-	probe := http.NewServeMux()
-	for _, p := range []string{"/api/summary", "/api/domains", "/api/domains/{id}", "/api/targets/{id}/results", "/api/config"} {
-		probe.HandleFunc("GET "+p, func(http.ResponseWriter, *http.Request) {})
+// routes는 /api 경로 전체다. 조회는 누구나, 쓰기와 감사 로그는 관리자만.
+func (a *API) routes() []route {
+	return []route{
+		{"GET", "/api/summary", a.summary},
+		{"GET", "/api/domains", a.listDomains},
+		{"GET", "/api/domains/{id}", a.getDomain},
+		{"GET", "/api/targets/{id}/results", a.targetResults},
+		{"GET", "/api/config", a.config},
+		{"GET", "/api/session", a.sessionStatus},
+		{"POST", "/api/session", jsonOnly(a.login)},
+		{"DELETE", "/api/session", jsonOnly(a.logout)},
+		{"GET", "/api/audit", a.admin(a.listAudit)},
+	}
+}
+
+// Register는 /api 경로를 mux에 붙인다. 모든 /api 응답은 JSON이다: 없는 경로는 404,
+// 있는 경로에 받지 않는 메서드는 405(Allow 헤더 포함).
+func (a *API) Register(mux *http.ServeMux) {
+	allow := map[string][]string{}
+	probe := http.NewServeMux() // 메서드 없이 경로만 등록해, catch-all에서 "경로는 있는데 메서드가 다름"을 가린다
+	for _, rt := range a.routes() {
+		mux.HandleFunc(rt.method+" "+rt.pattern, rt.h)
+		if _, seen := allow[rt.pattern]; !seen {
+			probe.HandleFunc(rt.pattern, func(http.ResponseWriter, *http.Request) {})
+		}
+		allow[rt.pattern] = append(allow[rt.pattern], rt.method)
 	}
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
-		get := r.Clone(r.Context())
-		get.Method = http.MethodGet
-		if _, pattern := probe.Handler(get); pattern != "" {
-			w.Header().Set("Allow", "GET, HEAD")
+		if _, pattern := probe.Handler(r); pattern != "" {
+			methods := allow[pattern]
+			if slices.Contains(methods, http.MethodGet) {
+				methods = append(slices.Clone(methods), http.MethodHead)
+			}
+			w.Header().Set("Allow", strings.Join(methods, ", "))
 			httpx.WriteError(w, http.StatusMethodNotAllowed, "method_not_allowed")
 			return
 		}
@@ -195,14 +218,10 @@ func (a *API) targetResults(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusNotFound, "not_found")
 		return
 	}
-	limit := defaultResultLimit
-	if v := r.URL.Query().Get("limit"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n < 1 {
-			httpx.WriteError(w, http.StatusBadRequest, "invalid_limit")
-			return
-		}
-		limit = min(n, maxResultLimit)
+	limit, ok := parseLimit(r, defaultResultLimit, maxResultLimit)
+	if !ok {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid_limit")
+		return
 	}
 	ctx := r.Context()
 	if _, err := a.Store.GetTarget(ctx, id); errors.Is(err, store.ErrNotFound) {
@@ -228,8 +247,11 @@ func (a *API) config(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// hostRE는 이름[:포트] 또는 [IPv6][:포트]다. 공개 주소는 자격 증명 안내에 들어가므로 경로·사용자 정보·공백이 섞인 값은 받지 않는다.
+var hostRE = regexp.MustCompile(`^([A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?|\[[0-9A-Fa-f:.]+\])(:[0-9]{1,5})?$`)
+
 // PublicURLFor는 클라이언트가 api에 닿는 주소다. PUBLIC_URL이 있으면 그 값, 없으면 요청에서 만든다.
-// X-Forwarded-Proto/Host는 신뢰하는 프록시에서 직접 온 요청일 때만 믿는다.
+// X-Forwarded-Proto/Host는 신뢰하는 프록시에서 직접 온 요청일 때만 믿는다. 쓸 수 있는 호스트가 없으면 빈 문자열이다.
 func (a *API) PublicURLFor(r *http.Request) string {
 	if a.PublicURL != "" {
 		return a.PublicURL
@@ -242,9 +264,12 @@ func (a *API) PublicURLFor(r *http.Request) string {
 		if p := firstValue(r.Header.Get("X-Forwarded-Proto")); p == "http" || p == "https" {
 			scheme = p
 		}
-		if h := firstValue(r.Header.Get("X-Forwarded-Host")); h != "" {
+		if h := firstValue(r.Header.Get("X-Forwarded-Host")); hostRE.MatchString(h) {
 			host = h
 		}
+	}
+	if !hostRE.MatchString(host) {
+		return ""
 	}
 	return scheme + "://" + host
 }
@@ -252,4 +277,17 @@ func (a *API) PublicURLFor(r *http.Request) string {
 func firstValue(s string) string {
 	v, _, _ := strings.Cut(s, ",")
 	return strings.TrimSpace(v)
+}
+
+// parseLimit은 ?limit= 값이다. 없으면 def, max보다 크면 max로 줄인다. 1보다 작거나 숫자가 아니면 ok=false.
+func parseLimit(r *http.Request, def, max int) (int, bool) {
+	v := r.URL.Query().Get("limit")
+	if v == "" {
+		return def, true
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 1 {
+		return 0, false
+	}
+	return min(n, max), true
 }

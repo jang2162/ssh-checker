@@ -27,6 +27,8 @@ var now = time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
 
 const day = 24 * time.Hour
 
+const adminKey = "test-admin-key-0123456789abcdef0123"
+
 type fixture struct {
 	t   *testing.T
 	st  *store.Store
@@ -37,7 +39,7 @@ type fixture struct {
 func newFixture(t *testing.T) *fixture {
 	st := store.New(dbtest.New(t))
 	api := &adminapi.API{
-		Store: st, Zone: "acme.test", CheckInterval: 6 * time.Hour,
+		Store: st, Zone: "acme.test", CheckInterval: 6 * time.Hour, Auth: adminapi.NewAuth(adminKey),
 		IP:  httpx.ClientIP{Trusted: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}},
 		Now: func() time.Time { return now }, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
@@ -51,6 +53,61 @@ func (f *fixture) get(path string) *httptest.ResponseRecorder {
 	f.h.ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
 	return rec
 }
+
+type call struct {
+	method, path, body string
+	bearer             bool         // Authorization: Bearer <adminKey>
+	cookie             *http.Cookie // 세션 쿠키
+	contentType        string       // 비우면 GET이 아닐 때 application/json, "-"면 보내지 않음
+	remote             string       // RemoteAddr
+	headers            map[string]string
+}
+
+func (f *fixture) do(c call) *httptest.ResponseRecorder {
+	r := httptest.NewRequest(c.method, c.path, strings.NewReader(c.body))
+	ct := c.contentType
+	if ct == "" && c.method != http.MethodGet {
+		ct = "application/json"
+	}
+	if ct != "" && ct != "-" {
+		r.Header.Set("Content-Type", ct)
+	}
+	if c.bearer {
+		r.Header.Set("Authorization", "Bearer "+adminKey)
+	}
+	if c.cookie != nil {
+		r.AddCookie(c.cookie)
+	}
+	if c.remote != "" {
+		r.RemoteAddr = c.remote
+	}
+	for k, v := range c.headers {
+		if k == "Host" { // httptest.NewRequest는 Host 헤더를 r.Host로 옮기지 않는다
+			r.Host = v
+			continue
+		}
+		r.Header.Set(k, v)
+	}
+	rec := httptest.NewRecorder()
+	f.h.ServeHTTP(rec, r)
+	return rec
+}
+
+// admin은 Bearer 키로 부른다.
+func (f *fixture) admin(method, path, body string) *httptest.ResponseRecorder {
+	return f.do(call{method: method, path: path, body: body, bearer: true})
+}
+
+func decodeBody[T any](t *testing.T, rec *httptest.ResponseRecorder) T {
+	t.Helper()
+	var v T
+	if err := json.Unmarshal(rec.Body.Bytes(), &v); err != nil {
+		t.Fatalf("decode %d %s: %v", rec.Code, rec.Body, err)
+	}
+	return v
+}
+
+func itoa(n int64) string { return strconv.FormatInt(n, 10) }
 
 func (f *fixture) getJSON(path string, v any) {
 	f.t.Helper()
@@ -328,12 +385,13 @@ func TestUnknownPathAndMethod(t *testing.T) {
 		t.Fatalf("content-type = %q", ct)
 	}
 	for _, path := range []string{"/api/domains", "/api/domains/1", "/api/summary", "/api/targets/1/results", "/api/config"} {
-		rec := httptest.NewRecorder()
-		f.h.ServeHTTP(rec, httptest.NewRequest("POST", path, nil))
+		rec := f.do(call{method: http.MethodPut, path: path})
 		expectError(t, rec, http.StatusMethodNotAllowed, "method_not_allowed")
+		if allow := rec.Header().Get("Allow"); !strings.Contains(allow, "GET") {
+			t.Fatalf("%s Allow = %q", path, allow)
+		}
 	}
-	rec = httptest.NewRecorder()
-	f.h.ServeHTTP(rec, httptest.NewRequest("POST", "/api/nope", nil))
+	rec = f.do(call{method: http.MethodPost, path: "/api/nope"})
 	expectError(t, rec, http.StatusNotFound, "not_found")
 	if rec := f.get("/api/config"); rec.Code != http.StatusOK {
 		t.Fatalf("config = %d", rec.Code)
