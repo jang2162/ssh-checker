@@ -3,6 +3,7 @@ package config_test
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"ssl-checker/internal/config"
 )
@@ -77,5 +78,64 @@ func TestLoadErrors(t *testing.T) {
 				t.Fatalf("err = %v, want mention of %s", err, c.want)
 			}
 		})
+	}
+}
+
+func workerEnv() map[string]string {
+	m := apiEnv()
+	delete(m, "ADMIN_KEY")
+	return m
+}
+
+func TestMonitoringDefaults(t *testing.T) {
+	for _, role := range []config.Role{config.RoleAPI, config.RoleWorker} {
+		cfg, err := config.Load(role, env(apiEnv()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.CheckInterval != 6*time.Hour || cfg.DNSResolver != "1.1.1.1:53" {
+			t.Fatalf("role %d defaults = %s %s", role, cfg.CheckInterval, cfg.DNSResolver)
+		}
+	}
+}
+
+func TestCheckInterval(t *testing.T) {
+	m := workerEnv()
+	m["CHECK_INTERVAL"] = "30m"
+	cfg, err := config.Load(config.RoleWorker, env(m))
+	if err != nil || cfg.CheckInterval != 30*time.Minute {
+		t.Fatalf("30m = %s, %v", cfg.CheckInterval, err)
+	}
+	for _, bad := range []string{"4m", "abc", "-1h"} {
+		m["CHECK_INTERVAL"] = bad
+		if _, err := config.Load(config.RoleWorker, env(m)); err == nil || !strings.Contains(err.Error(), "CHECK_INTERVAL") {
+			t.Errorf("CHECK_INTERVAL=%q err = %v", bad, err)
+		}
+	}
+}
+
+func TestDNSResolver(t *testing.T) {
+	cases := map[string]string{
+		"8.8.8.8:53":        "8.8.8.8:53",
+		"9.9.9.9":           "9.9.9.9:53",
+		"[2606:4700::1111]": "[2606:4700::1111]:53",
+		"2606:4700::1111":   "[2606:4700::1111]:53",
+		"dns.internal:5353": "dns.internal:5353",
+		"  1.0.0.1:53  ":    "1.0.0.1:53",
+	}
+	for in, want := range cases {
+		m := workerEnv()
+		m["DNS_RESOLVER"] = in
+		cfg, err := config.Load(config.RoleWorker, env(m))
+		if err != nil || cfg.DNSResolver != want {
+			t.Errorf("DNS_RESOLVER=%q = %q, %v; want %q", in, cfg.DNSResolver, err, want)
+		}
+	}
+	for _, bad := range []string{"dns.internal", "1.1.1.1:0", "1.1.1.1:abc", ":53"} {
+		m := workerEnv()
+		m["DNS_RESOLVER"] = bad
+		if _, err := config.Load(config.RoleWorker, env(m)); err == nil || !strings.Contains(err.Error(), "DNS_RESOLVER") {
+			t.Errorf("DNS_RESOLVER=%q err = %v", bad, err)
+		}
 	}
 }

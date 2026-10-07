@@ -4,9 +4,11 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 	"strconv"
 	"strings"
+	"time"
 
 	"ssl-checker/internal/netutil"
 )
@@ -23,6 +25,10 @@ const (
 const (
 	defaultTXTTTL  = 60
 	minAdminKeyLen = 32
+
+	defaultCheckInterval = 6 * time.Hour
+	minCheckInterval     = 5 * time.Minute
+	defaultDNSResolver   = "1.1.1.1:53"
 )
 
 type Config struct {
@@ -34,6 +40,8 @@ type Config struct {
 	CFZoneID       string
 	AdminKey       string
 	TrustedProxies []netip.Prefix
+	CheckInterval  time.Duration
+	DNSResolver    string
 }
 
 // Load는 role에 필요한 변수를 읽는다. 문제가 여러 개면 한 번에 모두 돌려준다.
@@ -77,6 +85,20 @@ func Load(role Role, getenv func(string) string) (Config, error) {
 			c.TXTTTL = ttl
 		}
 	}
+	c.CheckInterval = defaultCheckInterval
+	if v := strings.TrimSpace(getenv("CHECK_INTERVAL")); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d < minCheckInterval {
+			errs = append(errs, fmt.Errorf("CHECK_INTERVAL must be a duration of at least %s, got %q", minCheckInterval, v))
+		} else {
+			c.CheckInterval = d
+		}
+	}
+	resolver, err := parseResolver(getenv("DNS_RESOLVER"))
+	if err != nil {
+		errs = append(errs, fmt.Errorf("DNS_RESOLVER: %w", err))
+	}
+	c.DNSResolver = resolver
 	if role == RoleAPI {
 		if len(c.AdminKey) < minAdminKeyLen {
 			errs = append(errs, fmt.Errorf("ADMIN_KEY must be at least %d bytes", minAdminKeyLen))
@@ -88,4 +110,24 @@ func Load(role Role, getenv func(string) string) (Config, error) {
 		c.TrustedProxies = proxies
 	}
 	return c, errors.Join(errs...)
+}
+
+// parseResolver는 host:port를 받는다. 포트 없는 IP는 53번 포트로 본다. 포트 없는 호스트명은
+// IPv6 주소와 헷갈리지 않게 거부한다.
+func parseResolver(s string) (string, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return defaultDNSResolver, nil
+	}
+	if ip, err := netip.ParseAddr(strings.Trim(s, "[]")); err == nil {
+		return net.JoinHostPort(ip.String(), "53"), nil
+	}
+	host, port, err := net.SplitHostPort(s)
+	if err != nil || host == "" {
+		return "", fmt.Errorf("want host:port, got %q", s)
+	}
+	if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+		return "", fmt.Errorf("port must be 1..65535, got %q", s)
+	}
+	return s, nil
 }
