@@ -8,14 +8,19 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"ssl-checker/internal/acmedns"
 	"ssl-checker/internal/adminapi"
 	"ssl-checker/internal/cnamecheck"
 	"ssl-checker/internal/config"
 	"ssl-checker/internal/db"
+	"ssl-checker/internal/dnsprovider"
 	"ssl-checker/internal/httpx"
+	"ssl-checker/internal/llmstxt"
 	"ssl-checker/internal/monitor"
 	"ssl-checker/internal/store"
+	"ssl-checker/internal/webui"
 )
 
 const (
@@ -50,6 +55,34 @@ func Serve(ctx context.Context, args []string, getenv func(string) string) error
 		return err
 	}
 
+	srv := &http.Server{
+		Addr:              *listen,
+		Handler:           newServeHandler(cfg, pool, provider),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+	errc := make(chan error, 1)
+	go func() { errc <- srv.ListenAndServe() }()
+	slog.Info("serving", "addr", *listen, "provider", cfg.DNSProvider, "zone", cfg.ChallengeZone)
+
+	select {
+	case err := <-errc:
+		return err
+	case <-ctx.Done():
+	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
+}
+
+// newServeHandler는 serve가 여는 핸들러 전체다: acme-dns 경로, /api, /llms.txt, 내장한 화면.
+// 화면은 API가 맡은 경로를 가로채지 않는다.
+func newServeHandler(cfg config.Config, pool *pgxpool.Pool, provider dnsprovider.Provider) http.Handler {
 	ip := httpx.ClientIP{Trusted: cfg.TrustedProxies}
 	st := store.New(pool)
 	svc := &acmedns.Service{Store: st, Provider: provider, Zone: cfg.ChallengeZone, TTL: cfg.TXTTTL}
@@ -72,35 +105,13 @@ func Serve(ctx context.Context, args []string, getenv func(string) string) error
 		Log:    slog.Default(),
 	}
 
-	// acme-dns 경로는 기존 핸들러에 그대로 넘기고, /api는 같은 mux에 붙인다.
+	// acme-dns 경로는 기존 핸들러에 그대로 넘기고, /api와 /llms.txt는 같은 mux에 붙인다.
 	mux := http.NewServeMux()
 	legacy := h.Routes()
 	mux.Handle("POST /update", legacy)
 	mux.Handle("POST /register", legacy)
 	mux.Handle("GET /health", legacy)
 	api.Register(mux)
-
-	srv := &http.Server{
-		Addr:              *listen,
-		Handler:           mux,
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		IdleTimeout:       60 * time.Second,
-	}
-	errc := make(chan error, 1)
-	go func() { errc <- srv.ListenAndServe() }()
-	slog.Info("serving", "addr", *listen, "provider", cfg.DNSProvider, "zone", cfg.ChallengeZone)
-
-	select {
-	case err := <-errc:
-		return err
-	case <-ctx.Done():
-	}
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return err
-	}
-	return nil
+	mux.Handle("GET /llms.txt", llmstxt.Handler(cfg.ChallengeZone, api.PublicURLFor))
+	return webui.Handler(mux)
 }
