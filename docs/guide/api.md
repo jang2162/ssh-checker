@@ -144,8 +144,9 @@ curl -s '<앱>/api/domains?status=critical'
 | `Authorization: Bearer <ADMIN_KEY>` | 스크립트, 에이전트 |
 | 세션 쿠키 `sslchk_session` (`POST /api/session`로 발급) | 대시보드 화면 |
 
-- 관리자가 아니면 401 `unauthorized`입니다. 틀린 키(로그인·Bearer)는 IP별로 5번까지 받고, 그 뒤로는 12초에 1번만 받습니다(429 `too_many_attempts`).
-- GET이 아닌 요청은 `Content-Type: application/json`이 있어야 합니다(본문이 없어도). 없으면 415 `unsupported_media_type`입니다. 모르는 필드가 있으면 400 `malformed_json`입니다.
+- 관리자가 아니면 401 `unauthorized`입니다. 틀린 키(로그인·Bearer)는 IP별로 5번까지 받고, 그 뒤로는 12초에 1번만 받습니다(429 `too_many_attempts`). 잠긴 IP는 틀린 키 시도와 Bearer 요청이 막히지만, 로그인으로 받은 쿠키는 그대로 통과합니다.
+- GET이 아닌 요청은 `Content-Type: application/json`이 있어야 합니다(본문이 없어도). 없으면 415 `unsupported_media_type`입니다. 모르는 필드가 있거나 본문이 64KiB를 넘으면 400 `malformed_json`입니다.
+- `allowfrom`은 최대 64개이고, 넘으면 400 `invalid_allowfrom`입니다.
 - 모든 쓰기는 감사 로그에 남습니다(`GET /api/audit`).
 
 ### 세션
@@ -153,10 +154,10 @@ curl -s '<앱>/api/domains?status=critical'
 | 요청 | 본문 | 응답 |
 | --- | --- | --- |
 | `POST /api/session` | `{"key":"<ADMIN_KEY>"}` | 200 `{"admin":true}` + 쿠키. 틀리면 401 |
-| `GET /api/session` | | `{"admin":true|false}` |
+| `GET /api/session` | | `{"admin":true|false}` (세션 쿠키만 봅니다. Bearer 키는 보고하지 않습니다) |
 | `DELETE /api/session` | | 204, 쿠키 삭제 |
 
-쿠키는 12시간 유효합니다. 서버에 세션을 저장하지 않으므로, **로그아웃해도 이미 복사된 쿠키는 만료까지 유효합니다.** 모든 세션을 끊으려면 `ADMIN_KEY`를 바꿉니다. 쿠키에는 `HttpOnly`, `SameSite=Strict`가 붙고, 공개 주소가 `https://`면 `Secure`도 붙습니다. 화면 로그인은 HTTPS(Caddy 뒤)에서 쓰는 것을 권장합니다.
+쿠키는 12시간 유효합니다. 서버에 세션을 저장하지 않으므로, **로그아웃해도 이미 복사된 쿠키는 만료까지 유효합니다.** 모든 세션을 끊으려면 `ADMIN_KEY`를 바꿉니다. 쿠키에는 `HttpOnly`, `SameSite=Strict`가 붙고, 공개 주소가 `http://`가 아니면 `Secure`도 붙습니다. 화면 로그인은 HTTPS(Caddy 뒤)에서 쓰는 것을 권장합니다.
 
 ### 도메인과 대상
 
@@ -198,11 +199,11 @@ ACME가 꺼진 도메인에 수정·재발급·확인·끄기를 부르면 409 `
 }
 ```
 
-`acme_sh`는 대상 서버에서 그대로 붙여 넣을 환경변수와 acme.sh 발급·설치 명령입니다. `ACMEDNS_BASE_URL`은 `PUBLIC_URL`(없으면 요청 주소)입니다.
+`acme_sh`는 대상 서버에서 그대로 붙여 넣을 환경변수와 acme.sh 발급·설치 명령입니다. `ACMEDNS_BASE_URL`은 `PUBLIC_URL`(없으면 요청 주소)입니다. 키 재발급(`rotate`) 응답의 스크립트는 `--issue`에 `--force`가 붙습니다. 이미 인증서가 있어도 다시 발급해야 새 키가 도메인 설정에 저장되기 때문입니다.
 
 ### 감사 로그
 
-`GET /api/audit?limit=100&before_id=<id>` (관리자, 최대 500) → `{"entries":[{"id","at","actor","action","target","source_ip","detail"}]}` 최신순. 다음 페이지는 마지막 항목의 `id`를 `before_id`로 넘깁니다.
+`GET /api/audit?limit=100&before_id=<id>` (관리자, 최대 500) → `{"entries":[{"id","at","actor","action","target","source_ip","detail"}]}` 최신순. 다음 페이지는 마지막 항목의 `id`를 `before_id`로 넘깁니다. `before_id`가 숫자가 아니면 400 `invalid_before_id`입니다.
 
 ```bash
 read -rs ADMIN_KEY

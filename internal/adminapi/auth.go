@@ -28,10 +28,15 @@ type Auth struct {
 }
 
 func NewAuth(adminKey string) *Auth {
+	return NewAuthShared(adminKey, httpx.NewKeyed(12*time.Second, 5))
+}
+
+// NewAuthShared는 실패 한도를 다른 곳(/register의 httpx.AdminAuth)과 함께 쓴다. 같은 키를 두 곳에서 5번씩 시도할 수 없게 한다.
+func NewAuthShared(adminKey string, failures *httpx.Keyed) *Auth {
 	return &Auth{
 		Sessions: session.New(adminKey),
 		keyHash:  sha256.Sum256([]byte(adminKey)),
-		failures: httpx.NewKeyed(12*time.Second, 5),
+		failures: failures,
 	}
 }
 
@@ -59,6 +64,11 @@ func (a *Auth) check(r *http.Request) (admin, wrongKey bool) {
 // admin은 관리자만 통과시킨다.
 func (a *API) admin(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// 쿠키는 서명돼 있어 시도 횟수를 셀 필요가 없다. 잠긴 IP에서도 로그인한 관리자는 통과한다.
+		if c, err := r.Cookie(session.CookieName); err == nil && a.Auth.Sessions.Valid(c.Value) {
+			next(w, r)
+			return
+		}
 		ip := a.IP.From(r).String()
 		if a.Auth.failures.Exhausted(ip) {
 			httpx.WriteError(w, http.StatusTooManyRequests, "too_many_attempts")

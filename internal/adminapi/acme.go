@@ -31,6 +31,15 @@ func parseAllowFrom(ss []string) ([]netip.Prefix, bool) {
 	return out, true
 }
 
+// joinPrefixes는 감사 기록용으로 정규화된 접두사를 쉼표로 잇는다.
+func joinPrefixes(ps []netip.Prefix) string {
+	ss := make([]string, len(ps))
+	for i, p := range ps {
+		ss[i] = p.String()
+	}
+	return strings.Join(ss, ",")
+}
+
 // domainFor는 경로의 도메인이다. 없으면 404로 답하고 ok=false.
 func (a *API) domainFor(w http.ResponseWriter, r *http.Request) (store.Domain, bool) {
 	id, ok := pathID(r)
@@ -93,7 +102,7 @@ type credentials struct {
 }
 
 // writeCredentials는 일회성 자격 증명이다. 비밀번호는 이 응답에만 나오므로 캐시하지 않게 한다.
-func (a *API) writeCredentials(w http.ResponseWriter, r *http.Request, status int, fqdn string, reg acmedns.Registration) {
+func (a *API) writeCredentials(w http.ResponseWriter, r *http.Request, status int, fqdn string, reg acmedns.Registration, rotated bool) {
 	allow := make([]string, 0, len(reg.AllowFrom))
 	for _, p := range reg.AllowFrom {
 		allow = append(allow, p.String())
@@ -105,23 +114,32 @@ func (a *API) writeCredentials(w http.ResponseWriter, r *http.Request, status in
 	w.Header().Set("Cache-Control", "no-store")
 	httpx.WriteJSON(w, status, credentials{
 		Username: reg.Username, Password: reg.Password, Subdomain: reg.Subdomain, FullDomain: reg.FullDomain,
-		CNAMERecord: cnameRecord(fqdn, reg.FullDomain), AllowFrom: allow, AcmeSh: acmeSh(base, fqdn, reg),
+		CNAMERecord: cnameRecord(fqdn, reg.FullDomain), AllowFrom: allow, AcmeSh: acmeSh(base, fqdn, reg, rotated),
 	})
 }
 
 // acmeSh는 대상 서버에서 그대로 붙여 넣을 acme.sh 명령이다(acme.sh 3.1.4 이상).
-func acmeSh(baseURL, fqdn string, reg acmedns.Registration) string {
+// rotated이면 이미 인증서가 있어 --issue가 "Skipping"으로 끝나므로 --force로 다시 발급해 새 키를 도메인 설정에 저장한다.
+func acmeSh(baseURL, fqdn string, reg acmedns.Registration, rotated bool) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "export ACMEDNS_BASE_URL=%q\n", baseURL)
 	fmt.Fprintf(&b, "export ACMEDNS_USERNAME=%q\n", reg.Username)
 	fmt.Fprintf(&b, "export ACMEDNS_PASSWORD=%q\n", reg.Password)
 	fmt.Fprintf(&b, "export ACMEDNS_SUBDOMAIN=%q\n", reg.Subdomain)
-	b.WriteString("# 처음 연결하는 도메인은 --issue에 --staging을 붙여 먼저 확인한다\n")
-	fmt.Fprintf(&b, "~/.acme.sh/acme.sh --issue --dns dns_acmedns -d %s -d '*.%s'\n", fqdn, fqdn)
+	b.WriteString("~/.acme.sh/acme.sh --set-default-ca --server letsencrypt\n")
+	issue := fmt.Sprintf("~/.acme.sh/acme.sh --issue --dns dns_acmedns -d %s -d '*.%s'", fqdn, fqdn)
+	if rotated {
+		b.WriteString("# 이미 발급된 인증서가 있어도 --force로 다시 발급해야 새 키가 도메인 설정에 저장된다\n")
+		issue += " --force"
+	} else {
+		b.WriteString("# 처음 연결하는 도메인은 --issue에 --staging을 붙여 먼저 확인한다\n")
+	}
+	b.WriteString(issue + "\n")
+	fmt.Fprintf(&b, "sudo mkdir -p /etc/ssl/%s\n", fqdn)
 	fmt.Fprintf(&b, "~/.acme.sh/acme.sh --install-cert -d %s --ecc \\\n", fqdn)
 	fmt.Fprintf(&b, "  --key-file /etc/ssl/%s/key.pem \\\n", fqdn)
 	fmt.Fprintf(&b, "  --fullchain-file /etc/ssl/%s/fullchain.pem \\\n", fqdn)
-	b.WriteString("  --reloadcmd \"systemctl reload nginx\"\n")
+	b.WriteString("  --reloadcmd \"sudo systemctl reload nginx\"\n")
 	return b.String()
 }
 
@@ -160,8 +178,8 @@ func (a *API) enableACME(w http.ResponseWriter, r *http.Request) {
 		a.serviceError(w, "enable acme", err)
 		return
 	}
-	a.audit(r, store.AuditEntry{Action: "acme_enable", Target: d.FQDN, Detail: "subdomain=" + reg.Subdomain})
-	a.writeCredentials(w, r, http.StatusCreated, d.FQDN, reg)
+	a.audit(r, store.AuditEntry{Action: "acme_enable", Target: d.FQDN, Detail: "subdomain=" + reg.Subdomain + " allowfrom=" + joinPrefixes(allow)})
+	a.writeCredentials(w, r, http.StatusCreated, d.FQDN, reg, false)
 }
 
 func (a *API) patchACME(w http.ResponseWriter, r *http.Request) {
@@ -190,7 +208,7 @@ func (a *API) patchACME(w http.ResponseWriter, r *http.Request) {
 		a.dbError(w, "set allowfrom", err)
 		return
 	}
-	a.audit(r, store.AuditEntry{Action: "acme_update", Target: d.FQDN, Detail: "allowfrom=" + strings.Join(*req.AllowFrom, ",")})
+	a.audit(r, store.AuditEntry{Action: "acme_update", Target: d.FQDN, Detail: "allowfrom=" + joinPrefixes(allow)})
 	a.writeACME(w, r, d)
 }
 
@@ -209,7 +227,7 @@ func (a *API) rotateACME(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.audit(r, store.AuditEntry{Action: "acme_rotate", Target: d.FQDN})
-	a.writeCredentials(w, r, http.StatusOK, d.FQDN, reg)
+	a.writeCredentials(w, r, http.StatusOK, d.FQDN, reg, true)
 }
 
 func (a *API) checkACME(w http.ResponseWriter, r *http.Request) {

@@ -42,6 +42,14 @@ DB를 잃으면 모든 계정이 사라집니다. 그러면 도메인마다 재�
 | `CF_API_TOKEN` | Cloudflare에서 새 토큰 발급 → `deploy/.env` 값 변경 → `dc up -d api worker` → `/health`가 `provider: ok`인지 확인 → 옛 토큰 삭제 |
 | 계정 키 | 아래 [계정 폐기와 키 재발급](#계정-폐기와-키-재발급) |
 
+### ADMIN_KEY가 새었을 때
+
+`ADMIN_KEY`로는 `allowfrom`을 비우고 키를 재발급해 CNAME이 이미 걸린 모든 도메인의 쓸 수 있는 키를 얻을 수 있습니다. 값을 바꿔도 공격자가 이미 얻은 키는 무효가 되지 않으므로 다음 순서로 정리합니다.
+
+1. `deploy/.env`의 `ADMIN_KEY`를 새 값으로 바꾸고 `dc up -d api`로 재배포합니다. 모든 로그인 세션도 끝납니다.
+2. `GET <앱>/api/audit`에서 내가 하지 않은 `acme_rotate`, `acme_update`, `acme_enable`, `login` 기록이 있는지 봅니다.
+3. 영향받은 도메인은 [키를 재발급](#계정-폐기와-키-재발급)하고, `allowfrom`을 원래대로 되돌립니다(`PATCH <앱>/api/domains/<id>/acme`).
+
 ## 계정 폐기와 키 재발급
 
 키가 새었거나 잃어버렸으면 **재발급**합니다. username과 서브도메인이 그대로라 CNAME은 다시 걸지 않아도 됩니다. 옛 키는 바로 무효가 됩니다.
@@ -102,7 +110,7 @@ psql-sslchk -c "SELECT at, actor, action, target, source_ip, detail FROM audit_l
 
 관리 API로 한 일은 `admin`, 로그인 실패는 `anonymous`로 남습니다. `GET <앱>/api/audit`(관리자)로도 볼 수 있습니다.
 
-관리자 키 인증 실패와 잠금은 감사 로그가 아니라 api 로그(`dc logs api`)에 `admin auth failed`, `admin auth locked out`로 남습니다. 키 값은 기록하지 않습니다.
+관리자 키 인증 실패는 api 로그(`dc logs api`)에 `admin auth failed`로 남습니다. `/register`의 잠금은 `admin auth locked out`로 남지만, `/api`의 잠금은 로그에 남지 않습니다. 화면 로그인 실패는 감사 로그에 `login_denied`로도 남습니다. 키 값은 기록하지 않습니다.
 
 감사 로그는 자동으로 지우지 않습니다. 필요하면 보존 기간을 정해 주기적으로 지웁니다.
 

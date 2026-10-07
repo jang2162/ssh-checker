@@ -98,11 +98,18 @@ func (a *API) deleteDomain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	st, err := a.Store.ACMEStateByDomain(ctx, id)
+	var detail string
 	switch {
 	case err == nil:
-		if err := a.Svc.Disable(ctx, st.AccountID); err != nil && !errors.Is(err, store.ErrNotFound) {
+		err := a.Svc.Disable(ctx, st.AccountID)
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
 			a.serviceError(w, "delete domain: disable acme", err)
 			return
+		}
+		detail = "subdomain=" + st.Subdomain
+		if err == nil {
+			// DeleteDomain이 실패해도 ACME를 껐다는 기록은 남는다.
+			a.audit(r, store.AuditEntry{Action: "acme_disable", Target: d.FQDN, Detail: detail})
 		}
 	case !errors.Is(err, store.ErrNotFound):
 		a.dbError(w, "delete domain: acme state", err)
@@ -112,7 +119,7 @@ func (a *API) deleteDomain(w http.ResponseWriter, r *http.Request) {
 		a.dbError(w, "delete domain", err)
 		return
 	}
-	a.audit(r, store.AuditEntry{Action: "domain_delete", Target: d.FQDN})
+	a.audit(r, store.AuditEntry{Action: "domain_delete", Target: d.FQDN, Detail: detail})
 	w.WriteHeader(http.StatusNoContent)
 }
 

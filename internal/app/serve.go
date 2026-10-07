@@ -53,10 +53,12 @@ func Serve(ctx context.Context, args []string, getenv func(string) string) error
 	ip := httpx.ClientIP{Trusted: cfg.TrustedProxies}
 	st := store.New(pool)
 	svc := &acmedns.Service{Store: st, Provider: provider, Zone: cfg.ChallengeZone, TTL: cfg.TXTTTL}
+	// ADMIN_KEY 틀린 시도는 /register와 /api가 한 한도를 나눠 쓴다.
+	adminFailures := httpx.NewKeyed(12*time.Second, 5)
 	h := &acmedns.Handler{
 		Svc:           svc,
 		IP:            ip,
-		Admin:         httpx.NewAdminAuth(cfg.AdminKey, ip),
+		Admin:         httpx.NewAdminAuthShared(cfg.AdminKey, ip, adminFailures),
 		UpdateLimit:   httpx.NewKeyed(updateEvery, updateBurst),
 		AuthFailLimit: httpx.NewKeyed(authFailEvery, authFailBurst),
 		Health:        &acmedns.HealthChecker{DB: pool, Provider: provider, CacheFor: time.Minute},
@@ -66,7 +68,7 @@ func Serve(ctx context.Context, args []string, getenv func(string) string) error
 		Store: st, Svc: svc, Zone: cfg.ChallengeZone, CheckInterval: cfg.CheckInterval, PublicURL: cfg.PublicURL, IP: ip,
 		Runner: &monitor.Runner{Prober: &monitor.Prober{}, Sink: st, Log: slog.Default()},
 		CNAME:  &cnamecheck.Checker{Resolver: cfg.DNSResolver},
-		Auth:   adminapi.NewAuth(cfg.AdminKey),
+		Auth:   adminapi.NewAuthShared(cfg.AdminKey, adminFailures),
 		Log:    slog.Default(),
 	}
 

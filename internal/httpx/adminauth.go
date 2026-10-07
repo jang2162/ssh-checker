@@ -20,7 +20,12 @@ type AdminAuth struct {
 }
 
 func NewAdminAuth(key string, ip ClientIP) *AdminAuth {
-	return &AdminAuth{keyHash: sha256.Sum256([]byte(key)), ip: ip, failures: NewKeyed(12*time.Second, 5)}
+	return NewAdminAuthShared(key, ip, NewKeyed(12*time.Second, 5))
+}
+
+// NewAdminAuthShared는 실패 한도를 다른 인증(/api)과 함께 쓴다.
+func NewAdminAuthShared(key string, ip ClientIP, failures *Keyed) *AdminAuth {
+	return &AdminAuth{keyHash: sha256.Sum256([]byte(key)), ip: ip, failures: failures}
 }
 
 func (a *AdminAuth) Wrap(next http.Handler) http.Handler {

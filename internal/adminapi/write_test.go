@@ -144,6 +144,12 @@ func TestDeleteDomainDisablesACME(t *testing.T) {
 	if v := f.mem.Values(reg.FullDomain); len(v) != 0 {
 		t.Fatalf("provider still has %v", v)
 	}
+	if got := auditDetails(t, f, "acme_disable"); len(got) != 1 || got[0] != "subdomain="+reg.Subdomain {
+		t.Fatalf("acme_disable audit = %v", got)
+	}
+	if got := auditDetails(t, f, "domain_delete"); len(got) != 1 || got[0] != "subdomain="+reg.Subdomain {
+		t.Fatalf("domain_delete audit = %v", got)
+	}
 }
 
 func TestDeleteDomainProviderFailure(t *testing.T) {
@@ -310,6 +316,21 @@ func auditActions(t *testing.T, f *fixture) []string {
 	out := make([]string, len(resp.Entries))
 	for i, e := range resp.Entries {
 		out[i] = e.Action
+	}
+	return out
+}
+
+// auditDetails는 action별 감사 기록의 detail이다(최신순).
+func auditDetails(t *testing.T, f *fixture, action string) []string {
+	t.Helper()
+	resp := decodeBody[struct {
+		Entries []struct{ Action, Detail string } `json:"entries"`
+	}](t, f.admin("GET", "/api/audit", ""))
+	var out []string
+	for _, e := range resp.Entries {
+		if e.Action == action {
+			out = append(out, e.Detail)
+		}
 	}
 	return out
 }

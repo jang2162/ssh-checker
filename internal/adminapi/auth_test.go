@@ -1,10 +1,15 @@
 package adminapi_test
 
 import (
+	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"ssl-checker/internal/adminapi"
+	"ssl-checker/internal/httpx"
 	"ssl-checker/internal/session"
 )
 
@@ -91,6 +96,50 @@ func TestWrongKeyLockout(t *testing.T) {
 	// 다른 IP는 영향을 받지 않는다.
 	if rec := f.do(call{method: "GET", path: "/api/audit", bearer: true, remote: "198.51.100.7:1"}); rec.Code != http.StatusOK {
 		t.Fatalf("other ip = %d", rec.Code)
+	}
+}
+
+// 잠긴 IP에서도 로그인한 관리자의 쿠키는 통과하고, 올바른 Bearer는 여전히 막힌다.
+func TestValidCookieBypassesLockout(t *testing.T) {
+	f := newFixture(t)
+	c := sessionCookie(t, f.do(call{method: "POST", path: "/api/session", body: `{"key":"` + adminKey + `"}`}))
+	for range 5 {
+		f.do(call{method: "GET", path: "/api/audit", headers: map[string]string{"Authorization": "Bearer wrong"}})
+	}
+	expectError(t, f.do(call{method: "GET", path: "/api/audit", bearer: true}), http.StatusTooManyRequests, "too_many_attempts")
+	if rec := f.do(call{method: "GET", path: "/api/audit", cookie: c}); rec.Code != http.StatusOK {
+		t.Fatalf("cookie from locked ip = %d %s", rec.Code, rec.Body)
+	}
+}
+
+// /register(httpx.AdminAuth)와 /api가 한 실패 한도를 나눠 쓴다.
+func TestSharedFailureBucket(t *testing.T) {
+	failures := httpx.NewKeyed(12*time.Second, 5)
+	api := &adminapi.API{Auth: adminapi.NewAuthShared(adminKey, failures), IP: httpx.ClientIP{}, Log: slog.New(slog.DiscardHandler)}
+	mux := http.NewServeMux()
+	api.Register(mux) // 잠긴 뒤에는 저장소에 닿기 전에 429로 끝나므로 Store는 필요 없다
+	legacyAuth := httpx.NewAdminAuthShared(adminKey, httpx.ClientIP{}, failures)
+	legacyAuth.Log = slog.New(slog.DiscardHandler)
+	legacy := legacyAuth.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	do := func(h http.Handler, bearer string) int {
+		r := httptest.NewRequest("GET", "/api/audit", nil)
+		r.RemoteAddr = "192.0.2.1:1"
+		r.Header.Set("Authorization", "Bearer "+bearer)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, r)
+		return rec.Code
+	}
+	for range 3 {
+		do(mux, "wrong")
+	}
+	for range 2 {
+		do(legacy, "wrong")
+	}
+	if got := do(mux, adminKey); got != http.StatusTooManyRequests {
+		t.Fatalf("api after 5 shared failures = %d", got)
+	}
+	if got := do(legacy, adminKey); got != http.StatusTooManyRequests {
+		t.Fatalf("legacy after 5 shared failures = %d", got)
 	}
 }
 

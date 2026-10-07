@@ -63,12 +63,20 @@ func TestEnableACME(t *testing.T) {
 		`export ACMEDNS_USERNAME="` + c.Username + `"`,
 		`export ACMEDNS_PASSWORD="` + c.Password + `"`,
 		`export ACMEDNS_SUBDOMAIN="` + c.Subdomain + `"`,
+		`--set-default-ca --server letsencrypt`,
 		`--issue --dns dns_acmedns -d a.com -d '*.a.com'`,
+		`sudo mkdir -p /etc/ssl/a.com`,
 		`--install-cert -d a.com --ecc`,
 	} {
 		if !strings.Contains(c.AcmeSh, want) {
 			t.Errorf("acme_sh missing %q:\n%s", want, c.AcmeSh)
 		}
+	}
+	if strings.Contains(c.AcmeSh, "--force") {
+		t.Errorf("enable script must not force:\n%s", c.AcmeSh)
+	}
+	if got := auditDetails(t, f, "acme_enable"); len(got) != 1 || got[0] != "subdomain="+c.Subdomain+" allowfrom=10.0.1.0/24,10.0.2.5/32" {
+		t.Errorf("acme_enable audit = %v", got)
 	}
 	if _, err := f.svc.Authenticate(context.Background(), c.Username, c.Password); err != nil {
 		t.Fatalf("issued credentials do not authenticate: %v", err)
@@ -109,6 +117,11 @@ func TestRotateKeepsSubdomain(t *testing.T) {
 	if c.Username != old.Username || c.Subdomain != old.Subdomain || c.CNAMERecord != old.CNAMERecord || c.Password == old.Password {
 		t.Fatalf("rotated = %+v, old = %+v", c, old)
 	}
+	for _, want := range []string{"--issue --dns dns_acmedns -d a.com -d '*.a.com' --force\n", "sudo mkdir -p /etc/ssl/a.com"} {
+		if !strings.Contains(c.AcmeSh, want) {
+			t.Errorf("rotate script missing %q:\n%s", want, c.AcmeSh)
+		}
+	}
 	ctx := context.Background()
 	if _, err := f.svc.Authenticate(ctx, old.Username, old.Password); !errors.Is(err, acmedns.ErrForbidden) {
 		t.Fatalf("old key still works: %v", err)
@@ -123,13 +136,16 @@ func TestPatchACMEAllowFrom(t *testing.T) {
 	d := f.createDomain("a.com")
 	f.enableACME(d.ID, `{"allowfrom":["10.0.1.0/24"]}`)
 	path := fmt.Sprintf("/api/domains/%d/acme", d.ID)
-	rec := f.admin("PATCH", path, `{"allowfrom":["10.9.0.0/16"]}`)
+	rec := f.admin("PATCH", path, `{"allowfrom":[" 10.9.0.0/16"]}`)
 	got := decodeBody[map[string]any](t, rec)
 	if rec.Code != http.StatusOK || fmt.Sprint(got["allowfrom"]) != "[10.9.0.0/16]" || got["enabled"] != true {
 		t.Fatalf("patch = %d %v", rec.Code, got)
 	}
 	if got := decodeBody[map[string]any](t, f.admin("PATCH", path, `{"allowfrom":[]}`)); fmt.Sprint(got["allowfrom"]) != "[]" {
 		t.Fatalf("cleared = %v", got)
+	}
+	if got := auditDetails(t, f, "acme_update"); len(got) != 2 || got[1] != "allowfrom=10.9.0.0/16" || got[0] != "allowfrom=" {
+		t.Fatalf("acme_update audit = %v", got)
 	}
 	expectError(t, f.admin("PATCH", path, `{}`), http.StatusBadRequest, "invalid_allowfrom")
 	expectError(t, f.admin("PATCH", path, `{"allowfrom":["x"]}`), http.StatusBadRequest, "invalid_allowfrom")
