@@ -109,6 +109,8 @@ curl https://ssl-checker.example.com/health        # Caddy 뒤일 때 (Caddy에 
 
 `provider`가 `ok`가 될 때까지는 도메인 연결을 시작하지 않습니다.
 
+브라우저로 `<앱>/`을 열어 [대시보드](dashboard.md)가 보이는지도 확인합니다. 이미지를 빌드할 때 화면(Node)도 함께 빌드하므로 처음 빌드는 npm 패키지를 받느라 조금 더 걸립니다.
+
 ## Komodo로 배포 (저장소 모드)
 
 Komodo Stack의 Git 저장소 모드를 쓰면 위의 3~5단계를 Komodo가 대신합니다. 배포할 때마다 이 저장소를 받아 compose로 띄우고, 이미지는 compose가 저장소의 Dockerfile로 빌드합니다. 레지스트리와 서버 접속이 필요 없습니다. 설정 전체는 [`deploy/komodo/ssl-checker.toml`](../../deploy/komodo/ssl-checker.toml)에 있습니다.

@@ -4,6 +4,8 @@
 
 아래에서 `<앱>`은 클라이언트가 부르는 api 주소입니다. 호스트 포트로 열었다면 `http://<BIND_ADDR>:<API_PORT>`, Caddy 뒤라면 Caddy에 설정한 주소(예: `https://ssl-checker.example.com`)입니다. `<존>`은 `CHALLENGE_ZONE` 값입니다.
 
+아래 API 호출은 [대시보드](dashboard.md)에서도 할 수 있습니다. 도메인 상세의 `ACME 켜기`가 1단계, `CNAME 지금 확인`이 2단계의 확인에 해당하고, 켠 직후 나오는 창에 3단계 명령이 값이 채워진 채로 들어 있습니다. 에이전트에게 맡길 때는 `<앱>/llms.txt`를 알려 주세요.
+
 ## 전체 흐름
 
 | 단계 | 누가 | 횟수 |

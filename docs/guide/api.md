@@ -109,6 +109,9 @@ DB 연결과 DNS 공급자 상태를 확인합니다.
 | `GET /api/domains/{id}` | 대상별·접속 주소별 최신 점검 결과와 ACME 상태 |
 | `GET /api/targets/{id}/results?limit=50` | 대상의 점검 이력, 최신순. `limit` 최대 500 |
 | `GET /api/config` | `challenge_zone`, `check_interval`(Go 시간 문자열, 예: `"6h0m0s"`), `public_url` |
+| `GET /api/codes` | 판정 코드 표 `{"codes":[{"code","status","meaning"}]}`. 나쁜 상태부터 정렬됩니다. 화면과 `/llms.txt`가 같은 표를 씁니다 |
+
+인증서를 받지 못한 점검 결과(접속 실패 등)에는 `not_before`·`not_after` 필드가 없습니다.
 
 상태는 `critical` > `warning` > `info` > `ok` > `unknown` 순으로 나쁩니다. 도메인 상태는 대상과 ACME 상태 중 가장 나쁜 것입니다.
 
@@ -210,3 +213,12 @@ read -rs ADMIN_KEY
 curl -s -X POST '<앱>/api/domains' -H "Authorization: Bearer $ADMIN_KEY" -H 'Content-Type: application/json' \
   -d '{"fqdn":"a.com"}'
 ```
+
+## 화면과 `/llms.txt`
+
+| 요청 | 내용 |
+| --- | --- |
+| `GET /`, `/domains/<id>`, `/audit` | 대시보드(SPA). 화면을 빌드하지 않은 바이너리는 503과 안내 페이지를 돌려줍니다 |
+| `GET /llms.txt` | 에이전트가 ACME를 구성할 때 따라 할 절차(`text/plain`). 서버 주소와 `CHALLENGE_ZONE`이 채워져 있고 인증이 필요 없습니다 |
+
+화면은 `/api/`, `/update`, `/register`, `/health`, `/llms.txt`를 가로채지 않습니다. 사용법은 [대시보드](dashboard.md)에 있습니다.

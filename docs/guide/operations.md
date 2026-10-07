@@ -147,6 +147,8 @@ psql-sslchk -c "SELECT target, count(*), max(at) FROM audit_logs WHERE action = 
 | `update_failed` + `transient` | Cloudflare 장애·요청 제한. acme.sh가 다음 실행 때 재시도합니다. |
 | CA 검증 실패 (TXT를 찾지 못함) | CNAME 대상 오타, 챌린지 존의 네임서버 위임, `dig TXT <fulldomain> @1.1.1.1`로 값이 보이는지 |
 | CA가 CAA 때문에 거부 | 도메인의 CAA 레코드에 `letsencrypt.org` 추가 |
+| 대시보드에 `오래됨` 표시 | worker가 멈췄거나 점검 주기(`CHECK_INTERVAL`)의 2배 넘게 점검이 안 됐습니다. `dc ps worker`, `dc logs worker`를 확인합니다. |
+| `<앱>/`이 503 "화면이 빌드되지 않았습니다" | Docker 이미지가 아니라 화면 없이 `go build`한 바이너리입니다. `make web-build` 뒤 다시 빌드하거나 이미지를 씁니다. API는 정상입니다. |
 | 발급은 됐는데 웹서버가 옛 인증서를 씀 | `--install-cert`의 `--reloadcmd`가 실행 권한이 있는지, 웹서버 설정의 인증서 경로 |
 
 ## 제거

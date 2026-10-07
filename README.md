@@ -1,10 +1,10 @@
 # ssl-checker
 
-DNS API가 없는 도메인에서도 acme.sh로 Let's Encrypt 인증서를 자동 발급·갱신할 수 있게 해 주는 DNS-01 검증 대행 서버입니다. 와일드카드 인증서도 됩니다.
+등록한 도메인의 TLS 인증서 상태(만료일, 발급자, 서버별 일치 여부)를 주기적으로 점검해 웹 대시보드에 보여 주는 서버입니다. 부가 기능으로, DNS API가 없는 도메인에서도 acme.sh로 Let's Encrypt 인증서를 자동 발급·갱신할 수 있게 해 주는 DNS-01 검증 대행을 제공합니다. 와일드카드 인증서도 됩니다. ACME는 등록한 도메인마다 켜고 끌 수 있습니다.
 
 [acme-dns](https://github.com/joohoi/acme-dns)와 같은 API를 제공하므로, 각 서버는 acme.sh에 들어 있는 `dns_acmedns` 플러그인을 그대로 씁니다. 클라이언트 쪽에 따로 설치할 것은 없습니다. acme-dns와 달리 직접 DNS 서버를 띄우지 않고, 챌린지 TXT를 Cloudflare 같은 DNS 공급자 API로 기록합니다. 그래서 53번 포트를 열거나 NS를 위임할 필요가 없습니다.
 
-## 동작 방식
+## ACME 위임 동작 방식
 
 ```
  서버(acme.sh) ──(1) 발급 요청──▶ Let's Encrypt
@@ -24,6 +24,9 @@ DNS API가 없는 도메인에서도 acme.sh로 Let's Encrypt 인증서를 자�
 
 ## 기능
 
+- 인증서 모니터링: 도메인마다 점검 대상(호스트명·포트·SNI·서버 IP 목록)을 등록하면 주기적으로 만료일, 발급자, 체인, 호스트명, TLS 버전을 점검합니다. 서버마다 같은 인증서가 깔렸는지도 비교합니다.
+- 웹 대시보드: 누구나 상태를 볼 수 있고, 등록·수정·ACME 설정은 `ADMIN_KEY`로 로그인한 관리자만 합니다([대시보드](docs/guide/dashboard.md)).
+- `/llms.txt`: 에이전트가 ACME를 구성할 때 따라 할 절차입니다. 서버 주소와 챌린지 존이 채워져 있습니다.
 - acme-dns 호환 `/update` API: 원본 acme-dns와 응답이 같은지 자동 테스트로 확인합니다.
 - 도메인별 계정과 키: 키는 bcrypt 해시로만 저장하고, 계정마다 허용 IP 대역(`allowfrom`)을 지정할 수 있습니다.
 - 값 2개 유지: `a.com`과 `*.a.com`을 한 인증서로 발급할 때 필요한 TXT 2개를 함께 유지합니다.
@@ -34,8 +37,8 @@ DNS API가 없는 도메인에서도 acme.sh로 Let's Encrypt 인증서를 자�
 
 ### 아직 없는 것
 
-- 관리 화면. 관리 API는 있습니다([API](docs/guide/api.md)). 화면은 아직 없습니다.
-- 인증서 만료 모니터링과 알림.
+- 알림(Slack, 메일 등). 상태는 대시보드와 API로 확인합니다.
+- 사용자별 계정과 역할. 관리자 키 하나로 관리합니다.
 
 ## 빠른 시작 (로컬에서 써 보기)
 
@@ -55,7 +58,8 @@ git clone <이 저장소> ssl-checker && cd ssl-checker
 | [설치와 배포](docs/guide/installation.md) | 준비물, 이미지 빌드, docker compose 배포, 첫 기동 확인 |
 | [설정](docs/guide/configuration.md) | 환경변수 전체 목록, 네트워크·프록시 설정, 비밀값 관리 |
 | [도메인 연결과 인증서 발급](docs/guide/onboarding.md) | 계정 등록, CNAME 등록, acme.sh 발급·설치·갱신, 서버 추가 |
-| [API 레퍼런스](docs/guide/api.md) | `/update`, `/register`, `/health`의 요청·응답·오류 코드 |
+| [대시보드](docs/guide/dashboard.md) | 화면 사용법, 관리자 로그인, 대상 등록, ACME 켜기, `/llms.txt`, 화면 개발 |
+| [API 레퍼런스](docs/guide/api.md) | `/update`, `/register`, `/health`와 `/api`의 요청·응답·오류 코드 |
 | [운영](docs/guide/operations.md) | 업데이트, 백업, 키 교체, 계정 폐기, 감사 로그, 문제 해결 |
 
 ## 명령
@@ -65,16 +69,17 @@ git clone <이 저장소> ssl-checker && cd ssl-checker
 | 명령 | 역할 |
 | --- | --- |
 | `ssl-checker migrate` | DB 마이그레이션을 적용하고 종료 |
-| `ssl-checker serve --listen :8080` | `/update`, `/register`, `/health` API |
-| `ssl-checker worker` | 시작할 때 한 번, 그 뒤 24시간마다 고아 TXT 정리 |
+| `ssl-checker serve --listen :8080` | `/update`, `/register`, `/health`, `/api`, 대시보드, `/llms.txt` |
+| `ssl-checker worker` | 시작할 때 한 번, 그 뒤 24시간마다 고아 TXT 정리. `CHECK_INTERVAL`마다 TLS 점검과 CNAME 확인 |
 | `ssl-checker healthcheck [--url URL]` | 컨테이너 헬스체크용 `/health` 확인 |
 
 ## 개발
 
-Go 1.27 이상과 Docker가 필요합니다.
+Go 1.27 이상과 Docker가 필요합니다. 화면(`web/`)을 고치려면 Node 24도 필요합니다.
 
 ```bash
 make db-up && make test && make db-down   # 단위·통합 테스트 (Postgres 컨테이너 사용)
+make web-test && make web-build           # 화면 로직 테스트, 타입 검사와 빌드
 ./scripts/smoke.sh                        # 이미지 + compose 스택 smoke 테스트
 ./scripts/compat.sh                       # 원본 acme-dns와 /update 응답 대조
 ```
