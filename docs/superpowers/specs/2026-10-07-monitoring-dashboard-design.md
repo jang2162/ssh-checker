@@ -123,7 +123,7 @@ ssl-checker를 **인증서 모니터링이 주목적이고, ACME DNS-01 위임�
 | --- | --- | --- |
 | `CONNECT_FAILED` | critical | TCP 접속 또는 TLS 핸드셰이크 실패, 타임아웃(10초) |
 | `CERT_EXPIRED` | critical | `not_after` < 지금 |
-| `CERT_EXPIRES_SOON` | critical | 남은 기간 < 7일 |
+| `CERT_EXPIRES_SOON` | critical | 남은 기간 < min(7일, 수명의 1/3). 수명이 짧은 인증서가 발급 직후부터 긴급이 되지 않게 한다(2026-10-07 결정) |
 | `CHAIN_INVALID` | critical | 시스템 신뢰 저장소로 체인 검증 실패(자체 서명 포함) |
 | `HOSTNAME_MISMATCH` | critical | SAN이 `sni`(없으면 hostname)를 덮지 않음 |
 | `RENEWAL_OVERDUE` | warning | 남은 기간 < 수명(`not_after − not_before`)의 1/3. 정상이면 이미 갱신됐을 시점 |

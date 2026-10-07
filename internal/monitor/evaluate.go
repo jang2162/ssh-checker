@@ -15,12 +15,14 @@ func Evaluate(r Result, now time.Time) (Status, []string) {
 		codes = append(codes, CodeConnectFailed)
 	} else {
 		left := r.NotAfter.Sub(now)
+		third := r.NotAfter.Sub(r.NotBefore) / 3
 		switch {
 		case left <= 0:
 			codes = append(codes, CodeCertExpired)
-		case left < expiresSoonWithin:
+		case left < min(expiresSoonWithin, third):
+			// 수명이 짧은 인증서(예: 6일짜리)는 7일 고정 기준이면 발급 직후부터 긴급이 되므로 수명의 1/3을 넘지 않게 한다.
 			codes = append(codes, CodeCertExpiresSoon)
-		case left < r.NotAfter.Sub(r.NotBefore)/3:
+		case left < third:
 			// ACME 클라이언트는 보통 수명이 1/3 남았을 때 갱신하므로, 정상이면 이미 바뀌었어야 한다.
 			codes = append(codes, CodeRenewalOverdue)
 		}

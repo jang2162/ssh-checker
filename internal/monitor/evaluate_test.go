@@ -34,6 +34,23 @@ func TestEvaluate(t *testing.T) {
 		{"7 days left is overdue not soon", func(r *Result) { r.NotBefore = now.Add(-83 * day); r.NotAfter = now.Add(7 * day) }, StatusWarning, []string{CodeRenewalOverdue}},
 		{"31 of 90 days left", func(r *Result) { r.NotBefore = now.Add(-59 * day); r.NotAfter = now.Add(31 * day) }, StatusOK, []string{}},
 		{"29 of 90 days left", func(r *Result) { r.NotBefore = now.Add(-61 * day); r.NotAfter = now.Add(29 * day) }, StatusWarning, []string{CodeRenewalOverdue}},
+		// 만료 임박 기준은 min(7일, 수명의 1/3)이다. 수명이 짧은 인증서가 발급 직후부터 긴급이 되지 않게 한다.
+		{"6-day cert, just issued", func(r *Result) { r.NotBefore = now.Add(-time.Hour); r.NotAfter = now.Add(6*day - time.Hour) }, StatusOK, []string{}},
+		{"6-day cert, 2.1 days left", func(r *Result) {
+			r.NotBefore = now.Add(-3*day - 20*time.Hour)
+			r.NotAfter = now.Add(2*day + 2*time.Hour)
+		}, StatusOK, []string{}},
+		{"6-day cert, 1.9 days left", func(r *Result) { r.NotBefore = now.Add(-4 * day); r.NotAfter = now.Add(2*day - 2*time.Hour) }, StatusCritical, []string{CodeCertExpiresSoon}},
+		{"20-day cert, 6.8 days left", func(r *Result) {
+			r.NotBefore = now.Add(-13*day - 4*time.Hour)
+			r.NotAfter = now.Add(6*day + 20*time.Hour)
+		}, StatusOK, []string{}},
+		{"20-day cert, 6.5 days left", func(r *Result) {
+			r.NotBefore = now.Add(-13*day - 12*time.Hour)
+			r.NotAfter = now.Add(6*day + 12*time.Hour)
+		}, StatusCritical, []string{CodeCertExpiresSoon}},
+		{"45-day cert, 10 days left is overdue not soon", func(r *Result) { r.NotBefore = now.Add(-35 * day); r.NotAfter = now.Add(10 * day) }, StatusWarning, []string{CodeRenewalOverdue}},
+		{"45-day cert, 6 days left", func(r *Result) { r.NotBefore = now.Add(-39 * day); r.NotAfter = now.Add(6 * day) }, StatusCritical, []string{CodeCertExpiresSoon}},
 		{"chain invalid sorted first", func(r *Result) { r.ChainOK = false; r.NotBefore = now.Add(-61 * day); r.NotAfter = now.Add(29 * day) }, StatusCritical, []string{CodeChainInvalid, CodeRenewalOverdue}},
 		{"hostname mismatch", func(r *Result) { r.HostnameOK = false }, StatusCritical, []string{CodeHostnameMismatch}},
 		{"tls 1.1", func(r *Result) { r.TLSVersion = "TLS 1.1" }, StatusWarning, []string{CodeTLSOutdated}},

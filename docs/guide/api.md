@@ -116,7 +116,7 @@ DB 연결과 DNS 공급자 상태를 확인합니다.
 | --- | --- | --- |
 | `CONNECT_FAILED` | critical | 접속이나 TLS 핸드셰이크 실패(10초). Go TLS 클라이언트가 거부하는 아주 오래된 서버(RSA 키 교환만 지원, 1024비트 미만 RSA 키, SHA-1 서명 등)도 `CONNECT_FAILED`로 나오므로 `error` 필드를 확인합니다. |
 | `CERT_EXPIRED` | critical | 인증서 만료 |
-| `CERT_EXPIRES_SOON` | critical | 만료까지 7일 미만 |
+| `CERT_EXPIRES_SOON` | critical | 만료까지 `min(7일, 수명의 1/3)` 미만. 90일짜리는 7일, 6일짜리 단기 인증서는 2일 |
 | `CHAIN_INVALID` | critical | 체인 검증 실패(자체 서명 포함) |
 | `HOSTNAME_MISMATCH` | critical | 인증서가 접속 이름을 덮지 않음 |
 | `RENEWAL_OVERDUE` | warning | 남은 기간이 수명의 1/3 미만. 정상이면 이미 갱신됐을 시점 |
