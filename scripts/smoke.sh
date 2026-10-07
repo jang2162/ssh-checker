@@ -1,5 +1,5 @@
 #!/bin/sh
-# compose 스택(memory 공급자)을 저장소에서 빌드해 띄우고 register → update → health를 확인한다.
+# compose 스택(memory 공급자)을 저장소에서 빌드해 띄우고 register → update → 관리 API → 화면·llms.txt를 확인한다.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -75,6 +75,23 @@ jar=$(mktemp)
 curl -fsS -c "$jar" -X POST "$BASE/api/session" -H "$json" -d "{\"key\":\"$ADMIN_KEY\"}" >/dev/null
 curl -fsS -b "$jar" "$BASE/api/session" | grep -q '"admin":true' || { echo "session cookie not accepted" >&2; exit 1; }
 rm -f "$jar"
+
+# 화면과 llms.txt. 화면 파일은 이미지를 빌드할 때 내장된다.
+ui=$(curl -fsS -o /dev/null -w '%{http_code} %{content_type}' "$BASE/")
+case "$ui" in "200 text/html"*) ;; *) echo "dashboard not served: $ui" >&2; exit 1 ;; esac
+spa=$(curl -fsS -o /dev/null -w '%{http_code}' "$BASE/domains/1")
+[ "$spa" = 200 ] || { echo "SPA fallback returned $spa" >&2; exit 1; }
+js=$(curl -fsS "$BASE/" | sed -n 's/.*src="\(\/assets\/[^"]*\.js\)".*/\1/p')
+[ -n "$js" ] || { echo "no script in index.html" >&2; exit 1; }
+curl -fsS -D - -o /dev/null "$BASE$js" | grep -qi 'cache-control: public, max-age=31536000, immutable' || { echo "asset cache header missing" >&2; exit 1; }
+code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/assets/missing.js")
+[ "$code" = 404 ] || { echo "missing asset returned $code" >&2; exit 1; }
+code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/update")
+[ "$code" = 405 ] || { echo "GET /update returned $code (화면이 API 경로를 가로챘다)" >&2; exit 1; }
+llms=$(curl -fsS "$BASE/llms.txt")
+echo "$llms" | grep -q "챌린지 존: $CHALLENGE_ZONE" || { echo "llms.txt missing zone" >&2; exit 1; }
+echo "$llms" | grep -q "$BASE/api/domains" || { echo "llms.txt missing base url" >&2; exit 1; }
+curl -fsS "$BASE/api/codes" | grep -q '"code":"CONNECT_FAILED"' || { echo "api/codes missing codes" >&2; exit 1; }
 
 $COMPOSE ps worker --format '{{.State}}' | grep -q running || { $COMPOSE logs worker; echo "worker not running" >&2; exit 1; }
 echo "smoke OK"

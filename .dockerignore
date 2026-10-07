@@ -5,3 +5,5 @@ deploy
 scripts
 test
 *.md
+web/node_modules
+internal/webui/dist
