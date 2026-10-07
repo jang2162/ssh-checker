@@ -133,4 +133,79 @@ DB 연결과 DNS 공급자 상태를 확인합니다.
 curl -s '<앱>/api/domains?status=critical'
 ```
 
-도메인과 모니터링 대상을 추가·수정하는 API는 다음 버전에서 추가됩니다.
+## 관리 API (`/api`, 관리자)
+
+도메인·모니터링 대상을 관리하고 ACME를 켜고 끕니다. 관리자만 부를 수 있습니다.
+
+### 인증
+
+| 방법 | 쓰는 곳 |
+| --- | --- |
+| `Authorization: Bearer <ADMIN_KEY>` | 스크립트, 에이전트 |
+| 세션 쿠키 `sslchk_session` (`POST /api/session`로 발급) | 대시보드 화면 |
+
+- 관리자가 아니면 401 `unauthorized`입니다. 틀린 키(로그인·Bearer)는 IP별로 5번까지 받고, 그 뒤로는 12초에 1번만 받습니다(429 `too_many_attempts`).
+- GET이 아닌 요청은 `Content-Type: application/json`이 있어야 합니다(본문이 없어도). 없으면 415 `unsupported_media_type`입니다. 모르는 필드가 있으면 400 `malformed_json`입니다.
+- 모든 쓰기는 감사 로그에 남습니다(`GET /api/audit`).
+
+### 세션
+
+| 요청 | 본문 | 응답 |
+| --- | --- | --- |
+| `POST /api/session` | `{"key":"<ADMIN_KEY>"}` | 200 `{"admin":true}` + 쿠키. 틀리면 401 |
+| `GET /api/session` | | `{"admin":true|false}` |
+| `DELETE /api/session` | | 204, 쿠키 삭제 |
+
+쿠키는 12시간 유효합니다. 서버에 세션을 저장하지 않으므로, **로그아웃해도 이미 복사된 쿠키는 만료까지 유효합니다.** 모든 세션을 끊으려면 `ADMIN_KEY`를 바꿉니다. 쿠키에는 `HttpOnly`, `SameSite=Strict`가 붙고, 공개 주소가 `https://`면 `Secure`도 붙습니다. 화면 로그인은 HTTPS(Caddy 뒤)에서 쓰는 것을 권장합니다.
+
+### 도메인과 대상
+
+| 요청 | 본문 | 응답 |
+| --- | --- | --- |
+| `POST /api/domains` | `{"fqdn":"a.com","memo":""}` | 201 도메인 상세. 409 `domain_exists`, 400 `invalid_domain`·`invalid_memo` |
+| `PATCH /api/domains/{id}` | `{"memo":"..."}` | 200 도메인 상세 |
+| `DELETE /api/domains/{id}` | | 204. ACME가 켜져 있으면 먼저 끄고(챌린지 TXT 삭제) 대상·기록과 함께 지웁니다 |
+| `POST /api/domains/{id}/targets` | `{"hostname":"www.a.com","port":443,"sni":"","ips":["10.0.1.10"],"memo":""}` | 201 대상(바로 점검한 결과 포함). 409 `target_exists`, 400 `invalid_target` |
+| `PATCH /api/targets/{id}` | 위 필드 중 바꿀 것만 | 200 대상. hostname·port·sni·ips를 바꾸면 바로 다시 점검합니다 |
+| `DELETE /api/targets/{id}` | | 204 |
+| `POST /api/targets/{id}/check` | | 200 `{"results":[...]}` 이번 점검 결과 |
+
+- `hostname`: 점검할 이름. 내부 이름(한 단어)이나 IP도 됩니다. 와일드카드는 안 됩니다.
+- `ips`: 서버별로 직접 접속할 IP 목록(최대 16개). 비우면 hostname으로 한 번 접속합니다.
+- `memo`: 최대 500자.
+
+### ACME
+
+| 요청 | 본문 | 응답 |
+| --- | --- | --- |
+| `POST /api/domains/{id}/acme` | `{"allowfrom":["10.0.1.0/24"]}` | 201 **일회성 자격 증명**. 409 `acme_enabled`, 400 `invalid_allowfrom` |
+| `PATCH /api/domains/{id}/acme` | `{"allowfrom":[...]}` | 200 ACME 상태. 빈 목록이면 어디서든 `/update`를 부를 수 있습니다 |
+| `POST /api/domains/{id}/acme/rotate` | | 200 일회성 자격 증명. username·서브도메인은 그대로, 키만 바뀝니다. 옛 키는 바로 무효 |
+| `POST /api/domains/{id}/acme/check` | | 200 ACME 상태(CNAME을 지금 확인한 결과) |
+| `DELETE /api/domains/{id}/acme` | | 204. 계정 폐기, 챌린지 TXT 삭제. 다시 켜면 서브도메인이 바뀌어 CNAME을 다시 걸어야 합니다 |
+
+ACME가 꺼진 도메인에 수정·재발급·확인·끄기를 부르면 409 `acme_disabled`입니다. 끄기나 도메인 삭제 중 DNS 공급자가 실패하면 아무것도 지우지 않고 500 `dns_provider_error`를 돌려줍니다.
+
+일회성 자격 증명 응답(`Cache-Control: no-store`). **비밀번호는 이 응답에만 나옵니다.**
+
+```json
+{
+  "username": "<uuid>", "password": "<40자>", "subdomain": "<uuid>",
+  "fulldomain": "<uuid>.acme.example.com",
+  "cname_record": "_acme-challenge.a.com. CNAME <uuid>.acme.example.com.",
+  "allowfrom": ["10.0.1.0/24"],
+  "acme_sh": "export ACMEDNS_BASE_URL=\"https://...\"\n..."
+}
+```
+
+`acme_sh`는 대상 서버에서 그대로 붙여 넣을 환경변수와 acme.sh 발급·설치 명령입니다. `ACMEDNS_BASE_URL`은 `PUBLIC_URL`(없으면 요청 주소)입니다.
+
+### 감사 로그
+
+`GET /api/audit?limit=100&before_id=<id>` (관리자, 최대 500) → `{"entries":[{"id","at","actor","action","target","source_ip","detail"}]}` 최신순. 다음 페이지는 마지막 항목의 `id`를 `before_id`로 넘깁니다.
+
+```bash
+read -rs ADMIN_KEY
+curl -s -X POST '<앱>/api/domains' -H "Authorization: Bearer $ADMIN_KEY" -H 'Content-Type: application/json' \
+  -d '{"fqdn":"a.com"}'
+```

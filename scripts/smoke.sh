@@ -47,5 +47,34 @@ echo "$domains" | grep -q '"enabled":true' || { echo "acme not shown as enabled:
 apicfg=$(curl -fsS "$BASE/api/config")
 echo "$apicfg" | grep -q "\"challenge_zone\":\"$CHALLENGE_ZONE\"" || { echo "unexpected config: $apicfg" >&2; exit 1; }
 
+auth="Authorization: Bearer $ADMIN_KEY"
+json="Content-Type: application/json"
+
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/domains" -H "$json" -d '{"fqdn":"smoke2.example"}')
+[ "$code" = 401 ] || { echo "unauthenticated write returned $code" >&2; exit 1; }
+
+dom=$(curl -fsS -X POST "$BASE/api/domains" -H "$auth" -H "$json" -d '{"fqdn":"smoke2.example"}')
+did=$(printf '%s' "$dom" | sed -n 's/^{"id":\([0-9]*\).*/\1/p')
+[ -n "$did" ] || { echo "unexpected domain response: $dom" >&2; exit 1; }
+
+creds=$(curl -fsS -X POST "$BASE/api/domains/$did/acme" -H "$auth" -H "$json" -d '{}')
+user2=$(field "$creds" username)
+pass2=$(field "$creds" password)
+sub2=$(field "$creds" subdomain)
+resp=$(curl -fsS -X POST "$BASE/update" -H "X-Api-User: $user2" -H "X-Api-Key: $pass2" \
+  -d "{\"subdomain\":\"$sub2\",\"txt\":\"$txt\"}")
+echo "$resp" | grep -q "\"txt\":\"$txt\"" || { echo "update with API-issued creds failed: $resp" >&2; exit 1; }
+
+rot=$(curl -fsS -X POST "$BASE/api/domains/$did/acme/rotate" -H "$auth" -H "$json")
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/update" -H "X-Api-User: $user2" -H "X-Api-Key: $pass2" \
+  -d "{\"subdomain\":\"$sub2\",\"txt\":\"$txt\"}")
+[ "$code" = 401 ] || { echo "old key after rotate returned $code" >&2; exit 1; }
+[ "$(field "$rot" subdomain)" = "$sub2" ] || { echo "rotate changed subdomain: $rot" >&2; exit 1; }
+
+jar=$(mktemp)
+curl -fsS -c "$jar" -X POST "$BASE/api/session" -H "$json" -d "{\"key\":\"$ADMIN_KEY\"}" >/dev/null
+curl -fsS -b "$jar" "$BASE/api/session" | grep -q '"admin":true' || { echo "session cookie not accepted" >&2; exit 1; }
+rm -f "$jar"
+
 $COMPOSE ps worker --format '{{.State}}' | grep -q running || { $COMPOSE logs worker; echo "worker not running" >&2; exit 1; }
 echo "smoke OK"

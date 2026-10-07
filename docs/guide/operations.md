@@ -44,20 +44,21 @@ DB를 잃으면 모든 계정이 사라집니다. 그러면 도메인마다 재�
 
 ## 계정 폐기와 키 재발급
 
-서버를 폐기했거나 담당자가 바뀌었거나 키가 새었을 때 계정을 폐기합니다. 폐기한 계정의 키로 갱신을 시도하면 `401`이 납니다. 지금은 관리 API가 없으므로 SQL로 처리합니다.
+키가 새었거나 잃어버렸으면 **재발급**합니다. username과 서브도메인이 그대로라 CNAME은 다시 걸지 않아도 됩니다. 옛 키는 바로 무효가 됩니다.
 
 ```bash
-psql-sslchk -c "SELECT d.fqdn, a.subdomain, a.created_at FROM acme_accounts a JOIN domains d ON d.id = a.domain_id WHERE a.revoked_at IS NULL ORDER BY d.fqdn;"
-psql-sslchk -c "UPDATE acme_accounts SET revoked_at = now() WHERE subdomain = '<subdomain>' AND revoked_at IS NULL;"
-dc restart worker     # 정리 작업을 바로 돌려 챌린지 TXT를 지운다(TLS 점검과 CNAME 점검도 바로 한 번 전체를 돈다)
+curl -s -X POST <앱>/api/domains/<id>/acme/rotate -H "Authorization: Bearer $ADMIN_KEY" -H 'Content-Type: application/json'
 ```
 
-키를 다시 받으려면 폐기한 뒤 같은 도메인을 [다시 등록](onboarding.md#1-계정-등록)합니다. 재등록하면 `subdomain`이 바뀝니다. 따라서 다음을 모두 다시 해야 합니다.
+응답의 새 `password`(또는 `acme_sh`)로 각 서버의 acme.sh 설정을 바꿉니다: `ACMEDNS_PASSWORD`를 새 값으로 export한 뒤 `--issue … --force`로 한 번 다시 발급하면 도메인 설정 파일에 새 값이 저장됩니다.
 
-1. `_acme-challenge.<도메인>` CNAME을 새 `fulldomain`으로 바꿉니다.
-2. 각 서버에서 새 자격 증명으로 `--issue`를 다시 실행합니다. 옛 자격 증명은 `~/.acme.sh/<도메인>_ecc/<도메인>.conf`에 남아 있으므로 새 값이 덮어씁니다.
+도메인에서 ACME를 더 쓰지 않으면 **끕니다**. 계정을 폐기하고 챌린지 TXT를 지웁니다. 다시 켜면 서브도메인이 바뀌어 CNAME을 다시 걸어야 합니다.
 
-도메인 자체를 더 쓰지 않는다면 폐기한 뒤 `_acme-challenge` CNAME도 지웁니다.
+```bash
+curl -s -X DELETE <앱>/api/domains/<id>/acme -H "Authorization: Bearer $ADMIN_KEY" -H 'Content-Type: application/json'
+```
+
+DNS 공급자가 실패하면 아무것도 바꾸지 않고 500 `dns_provider_error`를 돌려줍니다. 공급자가 회복된 뒤 다시 부릅니다.
 
 ## 정리 작업
 
@@ -94,6 +95,12 @@ psql-sslchk -c "SELECT at, actor, action, target, source_ip, detail FROM audit_l
 | `update_denied` | `/update` 거부 | `invalid_credentials`, `ip_unauthorized`, `subdomain_mismatch`, `bad_txt`, `rate_limited` |
 | `update_failed` | DNS 공급자나 DB 오류 | `transient: …` 또는 `config: …` |
 | `txt_cleanup` | worker 정리 (`actor`=`worker`) | `deleted`, `repaired` |
+| `login`, `login_denied` | 화면 로그인 성공·실패 (`actor`=`admin`·`anonymous`) | |
+| `domain_create`, `domain_update`, `domain_delete` | 관리 API로 도메인 변경 | |
+| `target_create`, `target_update`, `target_delete`, `target_check` | 관리 API로 모니터링 대상 변경·점검 | |
+| `acme_enable`, `acme_update`, `acme_rotate`, `acme_check`, `acme_disable` | 관리 API로 ACME 변경 | |
+
+관리 API로 한 일은 `admin`, 로그인 실패는 `anonymous`로 남습니다. `GET <앱>/api/audit`(관리자)로도 볼 수 있습니다.
 
 관리자 키 인증 실패와 잠금은 감사 로그가 아니라 api 로그(`dc logs api`)에 `admin auth failed`, `admin auth locked out`로 남습니다. 키 값은 기록하지 않습니다.
 

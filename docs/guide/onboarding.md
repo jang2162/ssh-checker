@@ -8,43 +8,37 @@
 
 | 단계 | 누가 | 횟수 |
 | --- | --- | --- |
-| 1. 계정 등록 | 관리자 (`ADMIN_KEY` 보유) | 도메인당 1번 |
+| 1. 도메인 등록과 ACME 켜기 | 관리자 (`ADMIN_KEY` 보유) | 도메인당 1번 |
 | 2. CNAME 등록 | 그 도메인의 DNS 관리자 | 도메인당 1번 |
 | 3. 발급과 설치 | 각 서버 | 서버당 1번 |
 | 4. 자동 갱신 | 각 서버의 acme.sh cron | 자동 |
 
-## 1. 계정 등록
+## 1. 도메인 등록과 ACME 켜기
 
-도메인 하나에 계정 하나를 만듭니다. 이 계정으로 `a.com`과 `*.a.com`을 함께 처리합니다. `*.a.com` 인증서가 `www.a.com`, `api.a.com` 같은 한 단계 아래 이름을 모두 덮습니다. 두 단계 아래(`*.dev.a.com`)가 필요하면 `dev.a.com`을 따로 등록합니다.
+도메인 하나에 ACME 계정 하나를 만듭니다. 이 계정으로 `a.com`과 `*.a.com`을 함께 처리합니다. `*.a.com` 인증서가 `www.a.com`, `api.a.com` 같은 한 단계 아래 이름을 모두 덮습니다. 두 단계 아래(`*.dev.a.com`)가 필요하면 `dev.a.com`을 따로 등록합니다.
 
 `ADMIN_KEY`가 셸 히스토리에 남지 않게 입력으로 받습니다.
 
 ```bash
 read -rs ADMIN_KEY      # 붙여넣고 Enter. 화면에 표시되지 않는다
-curl -s -X POST <앱>/register \
-  -H "Authorization: Bearer $ADMIN_KEY" \
-  -d '{"domain":"a.com","allowfrom":["10.0.1.10/32","10.0.1.11/32"]}'
-unset ADMIN_KEY
+A='Authorization: Bearer '"$ADMIN_KEY"
+J='Content-Type: application/json'
+
+# 도메인 등록 (이미 있으면 409 domain_exists — GET <앱>/api/domains 에서 id를 찾는다)
+curl -s -X POST <앱>/api/domains -H "$A" -H "$J" -d '{"fqdn":"a.com"}'
+# 응답의 "id"로 ACME 켜기
+curl -s -X POST <앱>/api/domains/<id>/acme -H "$A" -H "$J" \
+  -d '{"allowfrom":["10.0.1.10/32","10.0.1.11/32"]}'
+unset ADMIN_KEY A
 ```
 
-- `domain`: 인증서를 받을 도메인. 와일드카드(`*.a.com`)가 아니라 `a.com`으로 등록합니다.
 - `allowfrom`: 이 계정으로 `/update`를 부를 수 있는 서버 IP나 CIDR 목록. 비우면 어디서든 부를 수 있습니다. 서버 IP를 알고 있다면 넣는 것을 권장합니다. 프록시 뒤나 rootless Docker라면 먼저 [출발지 IP를 확인](configuration.md#네트워크와-프록시)합니다.
 
-응답 예:
+응답에는 `username`, `password`, `subdomain`, `fulldomain`, 등록할 CNAME 한 줄(`cname_record`), 그리고 3단계에서 그대로 붙여 넣을 acme.sh 명령(`acme_sh`)이 들어 있습니다.
 
-```json
-{
-  "username": "c36f50e8-4632-44f0-83fe-e070fef28a10",
-  "password": "htg2sPJ8C0…(40자)",
-  "fulldomain": "8e5700ea-a4bf-41c7-8a77-e990661dcc6a.acme-chk.example",
-  "subdomain": "8e5700ea-a4bf-41c7-8a77-e990661dcc6a",
-  "allowfrom": ["10.0.1.10/32", "10.0.1.11/32"]
-}
-```
+`password`는 이때 한 번만 나오고 다시 볼 수 없습니다. 이 도메인의 인증서를 발급받을 수 있는 비밀이므로 시크릿 저장소에 바로 넣습니다. 티켓이나 채팅에 붙이지 않습니다. 잃어버리면 [키를 재발급](operations.md#계정-폐기와-키-재발급)합니다. 서브도메인이 그대로라 CNAME은 다시 걸지 않아도 됩니다.
 
-`password`는 이때 한 번만 나오고 다시 볼 수 없습니다. 이 도메인의 인증서를 발급받을 수 있는 비밀이므로 시크릿 저장소에 바로 넣습니다. 티켓이나 채팅에 붙이지 않습니다. 잃어버리면 [재등록](operations.md#계정-폐기와-키-재발급)합니다.
-
-이미 활성 계정이 있는 도메인을 다시 등록하면 `409 account_exists`가 납니다.
+예전 방식인 `POST /register`(`{"domain":"a.com","allowfrom":[...]}`)도 그대로 동작합니다. 도메인이 없으면 만들고 ACME를 켭니다.
 
 ## 2. CNAME 등록
 
@@ -62,6 +56,8 @@ _acme-challenge.a.com.  CNAME  <fulldomain>.
 dig +short CNAME _acme-challenge.a.com @1.1.1.1
 # 8e5700ea-a4bf-41c7-8a77-e990661dcc6a.acme-chk.example.
 ```
+
+ssl-checker도 공개 DNS로 확인합니다: `POST <앱>/api/domains/<id>/acme/check`의 `cname_status`가 `ok`면 됩니다(worker도 `CHECK_INTERVAL`마다 확인합니다).
 
 `a.com`에 CAA 레코드가 있다면 `letsencrypt.org`가 허용 목록에 있어야 합니다.
 
@@ -151,10 +147,7 @@ acme.sh는 설치할 때 cron을 등록합니다. 갱신 시점이 되면 같은
 
 ## 같은 도메인에 서버 추가
 
-계정과 CNAME은 그대로 두고, 새 서버에서 3단계만 다시 실행합니다. 새 서버 IP가 `allowfrom`에 없으면 `/update`가 거부됩니다. 지금은 `allowfrom`을 수정하는 API가 없으므로 다음 둘 중 하나로 처리합니다.
-
-- 처음 등록할 때 서버들이 있는 대역(예: `10.0.1.0/24`)을 넣어 둡니다.
-- 계정을 폐기하고 새 IP를 넣어 재등록합니다. 재등록하면 `subdomain`이 바뀌므로 CNAME도 다시 등록해야 합니다.
+계정과 CNAME은 그대로 두고, 새 서버에서 3단계만 다시 실행합니다. 새 서버 IP가 `allowfrom`에 없으면 `/update`가 거부됩니다. `PATCH <앱>/api/domains/<id>/acme`에 `{"allowfrom":[...]}`로 목록 전체를 다시 보내 고칩니다. 계정과 CNAME은 그대로입니다.
 
 ## 문제가 생기면
 

@@ -10,9 +10,11 @@ import (
 
 	"ssl-checker/internal/acmedns"
 	"ssl-checker/internal/adminapi"
+	"ssl-checker/internal/cnamecheck"
 	"ssl-checker/internal/config"
 	"ssl-checker/internal/db"
 	"ssl-checker/internal/httpx"
+	"ssl-checker/internal/monitor"
 	"ssl-checker/internal/store"
 )
 
@@ -27,7 +29,7 @@ const (
 	authFailBurst = 20
 )
 
-// Serve는 acme-dns 호환 API를 연다. SIGTERM을 받으면 진행 중인 요청을 마치고 끝낸다.
+// Serve는 acme-dns 호환 API와 /api(조회·관리)를 연다. SIGTERM을 받으면 진행 중인 요청을 마치고 끝낸다.
 func Serve(ctx context.Context, args []string, getenv func(string) string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	listen := fs.String("listen", ":8080", "listen address")
@@ -50,8 +52,9 @@ func Serve(ctx context.Context, args []string, getenv func(string) string) error
 
 	ip := httpx.ClientIP{Trusted: cfg.TrustedProxies}
 	st := store.New(pool)
+	svc := &acmedns.Service{Store: st, Provider: provider, Zone: cfg.ChallengeZone, TTL: cfg.TXTTTL}
 	h := &acmedns.Handler{
-		Svc:           &acmedns.Service{Store: st, Provider: provider, Zone: cfg.ChallengeZone, TTL: cfg.TXTTTL},
+		Svc:           svc,
 		IP:            ip,
 		Admin:         httpx.NewAdminAuth(cfg.AdminKey, ip),
 		UpdateLimit:   httpx.NewKeyed(updateEvery, updateBurst),
@@ -59,7 +62,13 @@ func Serve(ctx context.Context, args []string, getenv func(string) string) error
 		Health:        &acmedns.HealthChecker{DB: pool, Provider: provider, CacheFor: time.Minute},
 		Log:           slog.Default(),
 	}
-	api := &adminapi.API{Store: st, Zone: cfg.ChallengeZone, CheckInterval: cfg.CheckInterval, PublicURL: cfg.PublicURL, IP: ip, Log: slog.Default()}
+	api := &adminapi.API{
+		Store: st, Svc: svc, Zone: cfg.ChallengeZone, CheckInterval: cfg.CheckInterval, PublicURL: cfg.PublicURL, IP: ip,
+		Runner: &monitor.Runner{Prober: &monitor.Prober{}, Sink: st, Log: slog.Default()},
+		CNAME:  &cnamecheck.Checker{Resolver: cfg.DNSResolver},
+		Auth:   adminapi.NewAuth(cfg.AdminKey),
+		Log:    slog.Default(),
+	}
 
 	// acme-dns 경로는 기존 핸들러에 그대로 넘기고, /api는 같은 mux에 붙인다.
 	mux := http.NewServeMux()
