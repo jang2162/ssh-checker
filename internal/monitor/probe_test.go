@@ -134,3 +134,20 @@ func TestProbeMultipleIPs(t *testing.T) {
 		t.Fatalf("results = %+v", rs)
 	}
 }
+
+// 접속이 안 되는 주소가 여러 개여도 점검 한 번이 타임아웃 한 번 정도에 끝나야 한다.
+func TestProbeAddressesConcurrently(t *testing.T) {
+	port := hangingPort(t)
+	tg := target(port, "a.test", "127.0.0.1", "127.0.0.1", "127.0.0.1")
+	start := time.Now()
+	rs := (&Prober{Timeout: 300 * time.Millisecond}).Probe(context.Background(), tg)
+	if elapsed := time.Since(start); elapsed > 800*time.Millisecond {
+		t.Fatalf("Probe took %s; addresses were not probed concurrently", elapsed)
+	}
+	if len(rs) != 3 {
+		t.Fatalf("got %d results", len(rs))
+	}
+	for _, r := range rs {
+		expectCodes(t, r, StatusCritical, CodeConnectFailed)
+	}
+}

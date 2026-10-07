@@ -7,6 +7,7 @@ import (
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
+	"sync"
 	"time"
 )
 
@@ -20,12 +21,16 @@ type Prober struct {
 }
 
 // Probe는 대상의 접속 주소마다 결과 하나를 돌려준다. 판정(Status, Reasons)까지 채운다.
+// 주소들을 동시에 점검해 한 번의 점검이 Timeout 정도로 끝나게 한다("지금 점검"은 요청 제한 시간 안에 끝나야 한다).
 func (p *Prober) Probe(ctx context.Context, t Target) []Result {
 	addrs := t.DialAddresses()
-	out := make([]Result, 0, len(addrs))
-	for _, addr := range addrs {
-		out = append(out, p.probeAddr(ctx, t, addr))
+	out := make([]Result, len(addrs))
+	var wg sync.WaitGroup
+	for i, addr := range addrs {
+		i, addr := i, addr // 루프 변수 캡처
+		wg.Go(func() { out[i] = p.probeAddr(ctx, t, addr) })
 	}
+	wg.Wait()
 	return out
 }
 
