@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { AppProvider } from "./app/context.tsx";
 import { Layout } from "./components/Layout.tsx";
+import { AdminLogin } from "./pages/AdminLogin.tsx";
 import { Audit } from "./pages/Audit.tsx";
 import { Dashboard } from "./pages/Dashboard.tsx";
 import { DomainDetail } from "./pages/DomainDetail.tsx";
@@ -18,6 +19,7 @@ createRoot(document.getElementById("root")!).render(
             <Route index element={<Dashboard />} />
             <Route path="domains/:id" element={<DomainDetail />} />
             <Route path="audit" element={<Audit />} />
+            <Route path="admin" element={<AdminLogin />} />
             <Route path="*" element={<NotFound />} />
           </Route>
         </Routes>

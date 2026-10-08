@@ -86,6 +86,8 @@ h3 { font-size: 1rem; margin: 0 0 0.15rem; }
 .page-head { margin-bottom: 1rem; }
 .section-head { margin: 1.5rem 0 0.75rem; align-items: center; }
 .crumb { margin: 0 0 0.5rem; }
+.login-card { max-width: 26rem; margin: 3rem auto; }
+.login-card h1 { margin-bottom: 1rem; }
 
 /* 버튼 */
 .btn {

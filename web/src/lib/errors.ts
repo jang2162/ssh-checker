@@ -2,7 +2,7 @@ import { ApiError } from "../api/client.ts";
 
 /** 서버 오류 코드의 화면용 문구. 코드 목록은 docs/guide/api.md의 오류 표와 같다. */
 const MESSAGES: Record<string, string> = {
-  unauthorized: "관리자 로그인이 필요하거나 로그인이 만료됐습니다.",
+  unauthorized: "관리자 로그인이 필요하거나 로그인이 만료됐습니다. /admin에서 로그인하세요.",
   too_many_attempts: "시도가 너무 많습니다. 잠시 뒤 다시 시도하세요.",
   unsupported_media_type: "요청 형식이 올바르지 않습니다.",
   malformed_json: "요청 내용이 올바르지 않습니다.",

@@ -1,15 +1,24 @@
 import { useState, type FormEvent } from "react";
+import { Navigate } from "react-router-dom";
 import { ApiError } from "../api/client.ts";
 import { useApp } from "../app/context.tsx";
+import { usePageTitle } from "../app/usePageTitle.ts";
+import { Notice } from "../components/Notice.tsx";
 import { errorMessage } from "../lib/errors.ts";
-import { Dialog } from "./Dialog.tsx";
-import { Notice } from "./Notice.tsx";
 
-export function LoginDialog({ onClose }: { onClose: () => void }) {
-  const { login } = useApp();
+/**
+ * 관리자 로그인 화면(/admin). 상단 바에는 로그인 버튼을 두지 않아서, 관리자가 주소로 직접 들어온다.
+ * 로그인하면(또는 이미 로그인돼 있으면) 대시보드로 보낸다.
+ */
+export function AdminLogin() {
+  usePageTitle("관리자 로그인");
+  const { ready, admin, login } = useApp();
   const [key, setKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  if (!ready) return <p className="muted">불러오는 중…</p>;
+  if (admin) return <Navigate to="/" replace />;
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -17,17 +26,16 @@ export function LoginDialog({ onClose }: { onClose: () => void }) {
     setError(null);
     try {
       await login(key);
-      onClose();
     } catch (err) {
       // 로그인 화면의 401은 "세션 만료"가 아니라 "키가 틀림"이다.
       setError(err instanceof ApiError && err.status === 401 ? "관리자 키가 맞지 않습니다." : errorMessage(err));
-    } finally {
       setBusy(false);
     }
   }
 
   return (
-    <Dialog title="관리자 로그인" onClose={onClose}>
+    <section className="card login-card">
+      <h1>관리자 로그인</h1>
       <form onSubmit={(e) => void submit(e)}>
         <label className="field">
           <span>관리자 키 (ADMIN_KEY)</span>
@@ -36,10 +44,9 @@ export function LoginDialog({ onClose }: { onClose: () => void }) {
         <p className="muted small-text">로그인하면 12시간 동안 유지됩니다. 공용 PC에서는 사용 뒤 로그아웃하세요.</p>
         {error && <Notice kind="error">{error}</Notice>}
         <div className="actions">
-          <button type="button" className="btn" onClick={onClose}>취소</button>
           <button type="submit" className="btn primary" disabled={busy || key === ""}>로그인</button>
         </div>
       </form>
-    </Dialog>
+    </section>
   );
 }

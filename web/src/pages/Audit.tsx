@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { api } from "../api/endpoints.ts";
 import type { AuditEntry } from "../api/types.ts";
 import { useApp } from "../app/context.tsx";
@@ -25,7 +26,7 @@ export function Audit() {
   }, [data]);
 
   if (!ready) return <p className="muted">불러오는 중…</p>;
-  if (!admin) return <Notice kind="info">감사 로그는 관리자만 볼 수 있습니다. 오른쪽 위에서 로그인하세요.</Notice>;
+  if (!admin) return <Notice kind="info">감사 로그는 관리자만 볼 수 있습니다. <Link to="/admin">관리자 로그인</Link></Notice>;
 
   const entries = [...(data ?? []), ...older];
   const last = entries[entries.length - 1];
