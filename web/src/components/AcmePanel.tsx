@@ -5,8 +5,9 @@ import { useAction } from "../app/useAction.ts";
 import { AllowFromDialog } from "../dialogs/AllowFromDialog.tsx";
 import { ConfirmDialog } from "../dialogs/ConfirmDialog.tsx";
 import { CredentialsDialog } from "../dialogs/CredentialsDialog.tsx";
+import { T, t, tn } from "../i18n/index.ts";
 import { formatDateTime, relativeTime } from "../lib/format.ts";
-import { CNAME_LABEL } from "../lib/status.ts";
+import { cnameLabel } from "../lib/status.ts";
 import { CopyButton } from "./CopyButton.tsx";
 import { Notice } from "./Notice.tsx";
 
@@ -37,18 +38,18 @@ export function AcmePanel({ domain, admin, now, onChanged }: Props) {
   return (
     <section className="card">
       <div className="target-head">
-        <h2>ACME (DNS-01 위임)</h2>
+        <h2>{t("acme.title")}</h2>
         {admin && !acme.enabled && (
-          <button type="button" className="btn primary small" onClick={() => setDialog("enable")}>ACME 켜기</button>
+          <button type="button" className="btn primary small" onClick={() => setDialog("enable")}>{t("acme.enable")}</button>
         )}
         {admin && acme.enabled && (
           <div className="actions">
             <button type="button" className="btn small" disabled={check.busy} onClick={() => void checkCname()}>
-              {check.busy ? "확인 중…" : "CNAME 지금 확인"}
+              {check.busy ? t("acme.checking") : t("acme.checkCname")}
             </button>
-            <button type="button" className="btn small" onClick={() => setDialog("allow")}>허용 IP 수정</button>
-            <button type="button" className="btn small" onClick={() => setDialog("rotate")}>키 재발급</button>
-            <button type="button" className="btn small danger-text" onClick={() => setDialog("disable")}>ACME 끄기</button>
+            <button type="button" className="btn small" onClick={() => setDialog("allow")}>{t("acme.editAllow")}</button>
+            <button type="button" className="btn small" onClick={() => setDialog("rotate")}>{t("acme.rotate")}</button>
+            <button type="button" className="btn small danger-text" onClick={() => setDialog("disable")}>{t("acme.disable")}</button>
           </div>
         )}
       </div>
@@ -56,34 +57,34 @@ export function AcmePanel({ domain, admin, now, onChanged }: Props) {
 
       {!acme.enabled ? (
         <p className="muted">
-          ACME 위임이 꺼져 있습니다. 켜면 이 도메인의 인증서를 DNS API 없이 acme.sh로 발급·갱신할 수 있습니다.
+          {t("acme.off")}
         </p>
       ) : (
         <dl className="kv">
-          <dt>CNAME 레코드</dt>
+          <dt>{t("acme.cnameRecord")}</dt>
           <dd>
             <code>{acme.cname_record}</code> <CopyButton text={acme.cname_record} />
           </dd>
-          <dt>CNAME 확인</dt>
+          <dt>{t("acme.cnameCheck")}</dt>
           <dd>
-            {CNAME_LABEL[acme.cname_status]}
+            {cnameLabel(acme.cname_status)}
             {acme.cname_checked_at && <span className="muted"> · {when(acme.cname_checked_at, now)}</span>}
             {acme.cname_status === "mismatch" && acme.cname_value && (
               <div className="small-text">
-                현재 값: <code>{acme.cname_value}</code>. 위 레코드의 값으로 고쳐야 합니다.
+                <T k="acme.cnameMismatch" vars={{ value: acme.cname_value }} />
               </div>
             )}
           </dd>
-          <dt>마지막 TXT 갱신</dt>
-          <dd>{acme.last_update_at ? when(acme.last_update_at, now) : <span className="muted">아직 없음</span>}</dd>
-          <dt>마지막 갱신 실패</dt>
+          <dt>{t("acme.lastUpdate")}</dt>
+          <dd>{acme.last_update_at ? when(acme.last_update_at, now) : <span className="muted">{t("acme.notYet")}</span>}</dd>
+          <dt>{t("acme.lastFailure")}</dt>
           <dd>
-            {acme.last_failure_at ? when(acme.last_failure_at, now) : <span className="muted">없음</span>}
-            {acme.consecutive_failures > 0 && <span className="error-text"> · 연속 {acme.consecutive_failures}회 실패</span>}
+            {acme.last_failure_at ? when(acme.last_failure_at, now) : <span className="muted">{t("common.none")}</span>}
+            {acme.consecutive_failures > 0 && <span className="error-text"> · {tn("acme.consecutiveFailures", acme.consecutive_failures)}</span>}
           </dd>
-          <dt>허용 IP</dt>
+          <dt>{t("common.allowedIps")}</dt>
           <dd>
-            {acme.allowfrom.length > 0 ? acme.allowfrom.join(", ") : <span className="warning-text">제한 없음</span>}
+            {acme.allowfrom.length > 0 ? acme.allowfrom.join(", ") : <span className="warning-text">{t("common.unrestricted")}</span>}
           </dd>
           <dt>username</dt>
           <dd><code>{acme.username}</code></dd>
@@ -92,8 +93,8 @@ export function AcmePanel({ domain, admin, now, onChanged }: Props) {
 
       {dialog === "enable" && (
         <AllowFromDialog
-          title="ACME 켜기"
-          submitLabel="켜기"
+          title={t("acme.enable")}
+          submitLabel={t("acme.enableSubmit")}
           initial={[]}
           onClose={() => setDialog(null)}
           onSubmit={async (allowfrom) => {
@@ -105,8 +106,8 @@ export function AcmePanel({ domain, admin, now, onChanged }: Props) {
       )}
       {dialog === "allow" && acme.enabled && (
         <AllowFromDialog
-          title="허용 IP 수정"
-          submitLabel="저장"
+          title={t("acme.editAllow")}
+          submitLabel={t("common.save")}
           initial={acme.allowfrom}
           onClose={() => setDialog(null)}
           onSubmit={async (allowfrom) => {
@@ -117,8 +118,8 @@ export function AcmePanel({ domain, admin, now, onChanged }: Props) {
       )}
       {dialog === "rotate" && (
         <ConfirmDialog
-          title="키 재발급"
-          confirmLabel="재발급"
+          title={t("acme.rotate")}
+          confirmLabel={t("acme.rotateSubmit")}
           onClose={() => setDialog(null)}
           onConfirm={async () => {
             const value = await api.rotateAcme(domain.id);
@@ -126,14 +127,14 @@ export function AcmePanel({ domain, admin, now, onChanged }: Props) {
             onChanged();
           }}
         >
-          <p>새 키를 만듭니다. <strong>옛 키는 즉시 무효</strong>가 되어, 서버의 acme.sh에 새 키를 설정하기 전까지 갱신이 실패합니다.</p>
-          <p>서브도메인과 CNAME은 그대로라 DNS는 바꾸지 않아도 됩니다.</p>
+          <p><T k="acme.rotateBody1" /></p>
+          <p>{t("acme.rotateBody2")}</p>
         </ConfirmDialog>
       )}
       {dialog === "disable" && (
         <ConfirmDialog
-          title="ACME 끄기"
-          confirmLabel="끄기"
+          title={t("acme.disable")}
+          confirmLabel={t("acme.disableSubmit")}
           danger
           onClose={() => setDialog(null)}
           onConfirm={async () => {
@@ -141,8 +142,8 @@ export function AcmePanel({ domain, admin, now, onChanged }: Props) {
             onChanged();
           }}
         >
-          <p>계정을 폐기하고 챌린지 TXT를 지웁니다. 서버의 acme.sh 갱신이 더 이상 되지 않습니다.</p>
-          <p>다시 켜면 서브도메인이 새로 생겨 <strong>CNAME을 다시 걸어야</strong> 합니다.</p>
+          <p>{t("acme.disableBody1")}</p>
+          <p><T k="acme.disableBody2" /></p>
         </ConfirmDialog>
       )}
       {creds && <CredentialsDialog kind={creds.kind} creds={creds.value} onClose={() => setCreds(null)} />}

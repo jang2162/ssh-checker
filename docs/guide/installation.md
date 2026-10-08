@@ -1,160 +1,162 @@
-# 설치와 배포
+# Installation and deployment
 
-이 문서는 ssl-checker를 Docker Compose로 띄우는 데까지 다룹니다. 도메인을 연결하고 인증서를 발급하는 방법은 [도메인 연결과 인증서 발급](onboarding.md)에 있습니다.
+**English** | [한국어](installation.ko.md)
 
-## 1. 준비물
+This document covers getting ssl-checker up and running with Docker Compose. How to connect a domain and issue certificates is described in [Connecting domains and issuing certificates](onboarding.md).
 
-| 항목 | 설명 |
+## 1. Prerequisites
+
+| Item | Description |
 | --- | --- |
-| 서버 1대 | Docker와 Docker Compose v2가 설치된 리눅스. 인증서를 받을 서버들이 이 서버의 api에 닿아야 합니다(호스트 포트 또는 Caddy 경유). |
-| 챌린지 TXT를 둘 이름 | 아래 두 방식 중 하나. 예: 전용 도메인 `acme-chk.example`, 기존 존의 하위 이름 `acme.example.com` |
-| Cloudflare 계정 | 챌린지 TXT를 둘 존이 Cloudflare에 있어야 합니다. 무료 플랜이면 충분합니다. |
-| Cloudflare API 토큰 | 그 존의 `Zone > DNS > Edit` 권한**만** 가진 토큰. 다른 서비스(Caddy 등)와 같은 토큰을 쓰지 않습니다. |
-| 인증서를 받을 도메인 | `_acme-challenge` CNAME을 한 번 등록할 수 있으면 됩니다. 그 도메인의 DNS API는 필요 없습니다. |
+| One server | Linux with Docker and Docker Compose v2 installed. The servers that will receive certificates must be able to reach this server's api (via a host port or through Caddy). |
+| A name for the challenge TXT records | One of the two options below. Examples: a dedicated domain `acme-chk.example`, or a sub-name of an existing zone `acme.example.com` |
+| Cloudflare account | The zone that holds the challenge TXT records must be on Cloudflare. The free plan is enough. |
+| Cloudflare API token | A token that has **only** the `Zone > DNS > Edit` permission on that zone. Do not share the token with other services (Caddy, etc.). |
+| Domains that will receive certificates | You only need to be able to register an `_acme-challenge` CNAME once. A DNS API for those domains is not required. |
 
-### 챌린지 TXT를 둘 이름 정하기
+### Choosing the name for the challenge TXT records
 
-레코드는 `<uuid>.<CHALLENGE_ZONE>`으로 생기고, 각 도메인의 `_acme-challenge` CNAME이 이 이름을 가리킵니다. 나중에 바꾸면 모든 도메인의 CNAME을 다시 등록해야 하므로 처음에 확정합니다.
+Records are created as `<uuid>.<CHALLENGE_ZONE>`, and each domain's `_acme-challenge` CNAME points to that name. Changing it later means re-registering the CNAME for every domain, so settle on it up front.
 
-| 방식 | `CHALLENGE_ZONE` 예 | 장점 | 주의 |
+| Option | `CHALLENGE_ZONE` example | Pros | Caveats |
 | --- | --- | --- | --- |
-| **전용 도메인 (권장)** | `acme-chk.example` | 토큰 권한이 이 존에만 걸려, 토큰이 새도 피해가 챌린지 TXT에서 멈춥니다. | 도메인을 하나 새로 사서 Cloudflare 존으로 추가해야 합니다. |
-| 기존 존의 하위 이름 | `acme.example.com` (존은 `example.com`) | 새 도메인이 필요 없습니다. 레코드가 `acme.` 아래에만 생겨 존이 어지럽지 않습니다. | 토큰이 `example.com` 존 전체를 편집할 수 있게 되므로, 토큰이 새면 서비스 레코드도 바뀔 수 있습니다. **`CF_ZONE_ID`가 필수**입니다. |
+| **Dedicated domain (recommended)** | `acme-chk.example` | The token's permission is scoped to this zone only, so if the token leaks the damage stops at the challenge TXT records. | You have to buy a new domain and add it as a Cloudflare zone. |
+| Sub-name of an existing zone | `acme.example.com` (zone is `example.com`) | No new domain needed. Records are only created under `acme.`, so the zone does not get cluttered. | The token can edit the entire `example.com` zone, so if the token leaks your service records can be changed too. **`CF_ZONE_ID` is required.** |
 
-Cloudflare 토큰은 레코드 단위가 아니라 존 단위로만 권한을 줄 수 있습니다. 그래서 피해 범위를 줄이려면 전용 도메인이 낫습니다. 하위 존을 따로 분리하는 기능은 Cloudflare Enterprise 플랜에서만 됩니다. 어느 방식이든 ssl-checker는 `<소문자 UUID>.<CHALLENGE_ZONE>` 이름만 만들고 지우며, 존의 다른 레코드는 건드리지 않습니다.
+Cloudflare tokens can only be scoped per zone, not per record. That is why a dedicated domain is better for limiting the blast radius. Splitting off a separate subzone is only available on the Cloudflare Enterprise plan. Either way, ssl-checker only creates and deletes names of the form `<lowercase UUID>.<CHALLENGE_ZONE>` and never touches other records in the zone.
 
-## 2. Cloudflare 준비
+## 2. Preparing Cloudflare
 
-1. **전용 도메인을 쓴다면** 대시보드 첫 화면의 **Add a domain**으로 존을 추가합니다.
-   - DNS 레코드 가져오기는 건너뛰고, 플랜은 Free를 고릅니다.
-   - 등록기관에서 네임서버를 Cloudflare가 알려 준 두 값으로 바꿉니다. 존 상태가 **Active**가 될 때까지 기다립니다.
-   - 레코드는 하나도 만들 필요가 없습니다. 기존 존의 하위 이름을 쓴다면 이 단계는 건너뜁니다.
-2. **My Profile → API Tokens → Create Token → Create Custom Token**에서 토큰을 만듭니다.
+1. **If you use a dedicated domain**, add the zone with **Add a domain** on the dashboard home screen.
+   - Skip importing DNS records and choose the Free plan.
+   - At your registrar, change the nameservers to the two values Cloudflare gives you. Wait until the zone status becomes **Active**.
+   - You do not need to create any records. If you use a sub-name of an existing zone, skip this step.
+2. Create a token under **My Profile → API Tokens → Create Token → Create Custom Token**.
    - Permissions: `Zone` / `DNS` / `Edit`
-   - Zone Resources: `Include` / `Specific zone` / 챌린지 TXT를 둘 존 하나
-   - Client IP Address Filtering: ssl-checker 서버의 공인 출구 IP(권장)
-3. 그 존의 **Overview** 화면 오른쪽 API 섹션에서 **Zone ID**를 복사해 `CF_ZONE_ID`에 넣습니다. 존 단위 토큰은 존 목록을 조회하지 못할 수 있으므로 항상 넣는 것을 권장합니다.
+   - Zone Resources: `Include` / `Specific zone` / the one zone that will hold the challenge TXT records
+   - Client IP Address Filtering: the public egress IP of the ssl-checker server (recommended)
+3. Copy the **Zone ID** from the API section on the right side of that zone's **Overview** page and put it in `CF_ZONE_ID`. A zone-scoped token may not be able to list zones, so always setting it is recommended.
 
-## 3. 저장소 받기
+## 3. Getting the repository
 
-공식 이미지는 배포하지 않습니다. compose가 저장소의 `Dockerfile`로 이미지를 직접 빌드하므로 저장소만 받으면 됩니다.
+No official image is published. compose builds the image directly from the repository's `Dockerfile`, so all you need is the repository.
 
 ```bash
-git clone <이 저장소> ssl-checker && cd ssl-checker
+git clone <this repository> ssl-checker && cd ssl-checker
 ```
 
-이미지는 distroless 기반입니다. 셸과 curl이 없고, 컨테이너 헬스체크는 `ssl-checker healthcheck` 하위 명령으로 합니다.
+The image is distroless. It has no shell and no curl; the container health check uses the `ssl-checker healthcheck` subcommand.
 
-## 4. 환경변수 작성
+## 4. Writing the environment file
 
 ```bash
 cp deploy/production.env.example deploy/.env
 chmod 600 deploy/.env
 ```
 
-`deploy/.env`를 열어 값을 채웁니다. 최소한 아래 값은 넣어야 합니다. 비어 있으면 compose가 시작을 거부합니다.
+Open `deploy/.env` and fill in the values. At a minimum, set the values below. If they are empty, compose refuses to start.
 
-| 변수 | 넣을 값 |
+| Variable | Value |
 | --- | --- |
-| `BIND_ADDR` | 호스트 포트로 열 때: API를 열 호스트 IP. 인증서를 받을 서버들만 닿는 내부 주소 |
-| `CADDY_NETWORK`, `TRUSTED_PROXIES` | Caddy 뒤에 둘 때: Caddy의 Docker 네트워크 이름과 Caddy 주소 |
+| `BIND_ADDR` | When exposing via a host port: the host IP to open the API on. An internal address reachable only by the servers that receive certificates |
+| `CADDY_NETWORK`, `TRUSTED_PROXIES` | When running behind Caddy: the name of Caddy's Docker network and Caddy's address |
 | `DNS_PROVIDER` | `cloudflare` |
-| `CHALLENGE_ZONE` | 챌린지 TXT를 둘 이름. 전용 존 이름, 또는 기존 존의 하위 이름(예: `acme.example.com`) |
-| `CF_API_TOKEN`, `CF_ZONE_ID` | 2단계에서 만든 토큰과 Zone ID |
+| `CHALLENGE_ZONE` | The name for the challenge TXT records. A dedicated zone name, or a sub-name of an existing zone (e.g. `acme.example.com`) |
+| `CF_API_TOKEN`, `CF_ZONE_ID` | The token and Zone ID from step 2 |
 | `ADMIN_KEY` | `openssl rand -hex 32` |
 | `POSTGRES_PASSWORD` | `openssl rand -hex 24` |
 
-변수마다의 의미와 프록시 뒤에서 쓸 때의 주의점은 [설정](configuration.md)에 있습니다.
+What each variable means, and what to watch out for behind a proxy, is described in [Configuration](configuration.md).
 
-## 5. 기동
+## 5. Starting up
 
-api를 여는 방법에 따라 compose 파일을 하나 더 붙입니다. 자세한 내용은 [설정 → api를 여는 방법](configuration.md#api를-여는-방법)에 있습니다.
+Add one more compose file depending on how you expose the api. See [Configuration → Ways to expose the api](configuration.md#ways-to-expose-the-api) for details.
 
 ```bash
-# Caddy 뒤에 둘 때 (호스트 포트를 열지 않음)
+# Behind Caddy (no host port opened)
 docker compose -p ssl-checker -f deploy/compose.yaml -f deploy/compose.caddy.yaml --env-file deploy/.env up -d
 
-# 호스트 포트로 직접 열 때
+# Exposed directly on a host port
 docker compose -p ssl-checker -f deploy/compose.yaml -f deploy/compose.ports.yaml --env-file deploy/.env up -d
 ```
 
-처음 실행할 때 이미지를 빌드하므로 몇 분 걸립니다. 이후 `ps`·`logs` 같은 명령에도 같은 `-f` 목록을 붙입니다. 서비스 네 개가 뜹니다.
+The first run builds the image, so it takes a few minutes. Pass the same `-f` list to later commands such as `ps` and `logs`. Four services come up.
 
-| 서비스 | 역할 |
+| Service | Role |
 | --- | --- |
-| `db` | PostgreSQL 17. 데이터는 `pgdata` 볼륨에 둡니다. 포트를 외부에 열지 않습니다. |
-| `migrate` | 이미지를 빌드하고(`ssl-checker:local`), DB 마이그레이션을 적용한 뒤 종료합니다. 성공해야 api와 worker가 시작합니다. |
-| `api` | `/acme/*`(인증서를 받는 서버용 API와 스크립트), `/api/*`, 화면, `/register`, `/health`. 옛 `/update`도 남아 있습니다. `BIND_ADDR:API_PORT`로 열리거나, Caddy 네트워크에서 `ssl-checker-api:8080`으로 닿습니다. |
-| `worker` | `CHECK_INTERVAL`마다 TLS 점검과 ACME CNAME 점검을 돌리고, 하루에 한 번 고아 TXT를 정리하며 90일이 지난 점검 기록을 지웁니다. 작업 중복을 막기 위해 1개만 띄웁니다. |
+| `db` | PostgreSQL 17. Data lives in the `pgdata` volume. No port is exposed externally. |
+| `migrate` | Builds the image (`ssl-checker:local`), applies the DB migrations, and exits. api and worker start only if it succeeds. |
+| `api` | `/acme/*` (the API and scripts for servers that receive certificates), `/api/*`, the UI, `/register`, `/health`. The legacy `/update` is still available. It is exposed on `BIND_ADDR:API_PORT`, or reachable as `ssl-checker-api:8080` on the Caddy network. |
+| `worker` | Runs TLS checks and ACME CNAME checks every `CHECK_INTERVAL`, and once a day cleans up orphaned TXT records and deletes check records older than 90 days. Run only one instance to avoid duplicate work. |
 
-`migrate`가 `exited (0)`이고 `api`가 `healthy`면 정상입니다.
+If `migrate` is `exited (0)` and `api` is `healthy`, everything is fine.
 
-## 6. 첫 기동 확인
+## 6. First-start check
 
-인증서를 받을 서버에서 `/health`를 호출합니다.
+Call `/health` from a server that will receive certificates.
 
 ```bash
-curl http://<BIND_ADDR>:<API_PORT>/health          # 호스트 포트로 열었을 때
-curl https://ssl-checker.example.com/health        # Caddy 뒤일 때 (Caddy에 설정한 주소)
+curl http://<BIND_ADDR>:<API_PORT>/health          # when exposed on a host port
+curl https://ssl-checker.example.com/health        # when behind Caddy (the address configured in Caddy)
 # {"db":"ok","provider":"ok"}
 ```
 
-| 응답 | 의미 |
+| Response | Meaning |
 | --- | --- |
-| `provider":"ok"` | Cloudflare 토큰과 존 접근이 정상 |
-| `provider":"config"` | 토큰 권한, Zone ID, 토큰의 IP 필터를 확인합니다. |
-| `provider":"transient"` | Cloudflare 응답 지연이나 요청 제한. 1분 뒤 다시 확인합니다. |
-| `db":"error"` | `db` 컨테이너와 `POSTGRES_PASSWORD`를 확인합니다. |
-| 연결 안 됨 | 호스트 포트면 `BIND_ADDR`, 방화벽, 서버 간 네트워크를 확인합니다. Caddy 뒤면 Caddyfile의 `reverse_proxy ssl-checker-api:8080`, `remote_ip` 허용 대역, api가 `CADDY_NETWORK`에 붙었는지(`docker network inspect <네트워크>`)를 확인합니다. |
+| `provider":"ok"` | The Cloudflare token and zone access are working |
+| `provider":"config"` | Check the token permissions, the Zone ID, and the token's IP filter. |
+| `provider":"transient"` | Slow Cloudflare response or rate limiting. Check again in a minute. |
+| `db":"error"` | Check the `db` container and `POSTGRES_PASSWORD`. |
+| No connection | With a host port, check `BIND_ADDR`, the firewall, and the network between servers. Behind Caddy, check `reverse_proxy ssl-checker-api:8080` in the Caddyfile, the allowed `remote_ip` ranges, and whether api is attached to `CADDY_NETWORK` (`docker network inspect <network>`). |
 
-`provider`가 `ok`가 될 때까지는 도메인 연결을 시작하지 않습니다.
+Do not start connecting domains until `provider` is `ok`.
 
-브라우저로 `<앱>/`을 열어 [대시보드](dashboard.md)가 보이는지도 확인합니다. 이미지를 빌드할 때 화면(Node)도 함께 빌드하므로 처음 빌드는 npm 패키지를 받느라 조금 더 걸립니다.
+Also open `<app>/` in a browser and confirm that the [Dashboard](dashboard.md) appears. The UI (Node) is built together with the image, so the first build takes a little longer while it downloads npm packages.
 
-## Komodo로 배포 (저장소 모드)
+## Deploying with Komodo (repository mode)
 
-Komodo Stack의 Git 저장소 모드를 쓰면 위의 3~5단계를 Komodo가 대신합니다. 배포할 때마다 이 저장소를 받아 compose로 띄우고, 이미지는 compose가 저장소의 Dockerfile로 빌드합니다. 레지스트리와 서버 접속이 필요 없습니다. 설정 전체는 [`deploy/komodo/ssl-checker.toml`](../../deploy/komodo/ssl-checker.toml)에 있습니다.
+With the Git repo mode of a Komodo Stack, Komodo takes care of steps 3–5 above. On every deploy it pulls this repository and brings it up with compose, and compose builds the image from the repository's Dockerfile. No registry and no server login are needed. The full configuration is in [`deploy/komodo/ssl-checker.toml`](../../deploy/komodo/ssl-checker.toml).
 
-### 1. 비밀값 등록
+### 1. Registering secrets
 
-Komodo **Settings → Variables**에서 아래 세 값을 만들고 **Secret**을 켭니다. Secret을 켜면 로그에 값이 가려지고 관리자가 아닌 사용자는 볼 수 없습니다.
+In Komodo **Settings → Variables**, create the three values below and turn on **Secret**. With Secret on, the values are masked in logs and hidden from non-admin users.
 
-| 이름 | 값 |
+| Name | Value |
 | --- | --- |
 | `SSLCHK_ADMIN_KEY` | `openssl rand -hex 32` |
-| `SSLCHK_CF_API_TOKEN` | Cloudflare 토큰 |
+| `SSLCHK_CF_API_TOKEN` | Cloudflare token |
 | `SSLCHK_POSTGRES_PASSWORD` | `openssl rand -hex 24` |
 
-비밀값을 Komodo Core에 두고 싶지 않다면 배포 서버의 Periphery 설정 파일 `[secrets]`에 같은 이름으로 넣어도 됩니다. Periphery 시크릿은 Core를 거쳐 전송되지 않습니다.
+If you would rather not keep secrets in Komodo Core, you can instead put them under `[secrets]` with the same names in the Periphery config file on the deployment server. Periphery secrets are not transmitted through Core.
 
-### 2. Stack 만들기
+### 2. Creating the Stack
 
-UI에서 **Stacks → New Stack**을 누르고 아래처럼 채웁니다. 항목 이름은 Komodo v2.3 UI 기준입니다.
+In the UI, click **Stacks → New Stack** and fill it in as below. Field names follow the Komodo v2.3 UI.
 
-| UI 항목 | 값 |
+| UI field | Value |
 | --- | --- |
-| Server | 배포할 서버 |
-| Choose Mode | **Git Repo**. "Files On Server"를 고르면 저장소를 받지 않아 `compose.yaml`을 찾지 못합니다. |
-| Source: Git Provider / Repo / Branch | 이 저장소를 둔 Git 서버 / `<조직>/<저장소>` / `main` (예: `git.example.com` / `ops/ssl-checker` / `main`. GitHub이면 `github.com`) |
-| Source: Git Account | 비공개 저장소면 Komodo에 등록한 Git 계정 |
-| Files: Run Directory | `deploy` (비우면 저장소 루트에서 찾아 실패합니다) |
-| Files: File Paths | Caddy 뒤: `compose.yaml`, `compose.caddy.yaml` 두 줄. 호스트 포트로 열 때는 두 번째 줄을 `compose.ports.yaml`로 바꿉니다. 비우면 `compose.yaml` 하나만 써서 api가 어디에도 열리지 않습니다. |
-| Ignore Services | `migrate` (정상 종료하는 서비스라 상태 점검에서 제외) |
-| Build Images: Pre Build Images | 선택. 꺼도 `compose.yaml`의 `pull_policy: build` 때문에 Deploy할 때 이미지를 빌드합니다. 켜면 Deploy 전에 `docker compose build`를 먼저 실행합니다. Swarm Stack에서는 보이지 않습니다. |
-| Environment | `deploy/komodo/ssl-checker.toml`의 `environment` 블록. `<...>` 값을 채웁니다. 이 블록은 Caddy 뒤 구성 기준입니다. 호스트 포트로 열 때는 `CADDY_NETWORK` 대신 `BIND_ADDR`와 `API_PORT`를 넣습니다. |
+| Server | The server to deploy to |
+| Choose Mode | **Git Repo**. If you choose "Files On Server", the repository is not pulled and `compose.yaml` cannot be found. |
+| Source: Git Provider / Repo / Branch | The Git server hosting this repository / `<org>/<repo>` / `main` (e.g. `git.example.com` / `ops/ssl-checker` / `main`. For GitHub, `github.com`) |
+| Source: Git Account | For a private repository, the Git account registered in Komodo |
+| Files: Run Directory | `deploy` (if left empty, it looks in the repository root and fails) |
+| Files: File Paths | Behind Caddy: two lines, `compose.yaml` and `compose.caddy.yaml`. When exposing on a host port, change the second line to `compose.ports.yaml`. If left empty, only `compose.yaml` is used and the api is not exposed anywhere. |
+| Ignore Services | `migrate` (a service that exits normally, so it is excluded from status checks) |
+| Build Images: Pre Build Images | Optional. Even when off, the image is built on Deploy because of `pull_policy: build` in `compose.yaml`. When on, `docker compose build` runs before Deploy. Not shown for Swarm Stacks. |
+| Environment | The `environment` block from `deploy/komodo/ssl-checker.toml`. Fill in the `<...>` values. This block assumes the behind-Caddy setup. When exposing on a host port, set `BIND_ADDR` and `API_PORT` instead of `CADDY_NETWORK`. |
 
-Environment에서 비밀값은 반드시 `ADMIN_KEY=[[SSLCHK_ADMIN_KEY]]`처럼 보간으로만 넣습니다. Komodo는 이 내용을 `deploy/.env`로 써서 `--env-file`로 넘깁니다.
+In Environment, always insert secrets only through interpolation, such as `ADMIN_KEY=[[SSLCHK_ADMIN_KEY]]`. Komodo writes this content to `deploy/.env` and passes it with `--env-file`.
 
-Resource Sync를 쓴다면 UI 입력 대신 `deploy/komodo/ssl-checker.toml`을 sync의 `resource_path`에 넣고, `<...>` 값은 그 파일을 복사한 사본에서 채웁니다.
+If you use Resource Sync, instead of entering values in the UI, put `deploy/komodo/ssl-checker.toml` in the sync's `resource_path` and fill in the `<...>` values in a copy of that file.
 
-### 3. 배포와 확인
+### 3. Deploying and verifying
 
-Stack 화면에서 **Deploy**를 누릅니다. Komodo가 저장소를 받아 이미지를 빌드하고 `migrate` → `api`·`worker` 순으로 띄웁니다. 서비스 상태가 `api` healthy, `worker` running이 되면 위의 [6. 첫 기동 확인](#6-첫-기동-확인)을 합니다.
+Click **Deploy** on the Stack page. Komodo pulls the repository, builds the image, and starts `migrate` → `api`/`worker` in that order. Once the service status shows `api` healthy and `worker` running, do the [6. First-start check](#6-first-start-check) above.
 
-### 업데이트
+### Updating
 
-`main`에 새 커밋이 올라오면 Stack에서 **Deploy**를 다시 누릅니다. 최신 커밋을 받아 다시 빌드하고 컨테이너를 교체합니다. 푸시할 때마다 자동으로 배포하려면, Stack 설정의 **Webhook URL**을 복사해 GitLab 프로젝트 **Settings → Webhooks**에 Push events로 등록합니다.
+When a new commit lands on `main`, click **Deploy** on the Stack again. It pulls the latest commit, rebuilds, and replaces the containers. To deploy automatically on every push, copy the **Webhook URL** from the Stack settings and register it under the GitLab project's **Settings → Webhooks** for Push events.
 
-## 다음 단계
+## Next steps
 
-[도메인 연결과 인증서 발급](onboarding.md)으로 첫 도메인을 연결합니다. 처음에는 Let's Encrypt **스테이징**으로 발급해 보는 것을 권장합니다.
+Connect your first domain with [Connecting domains and issuing certificates](onboarding.md). For the first run, issuing against the Let's Encrypt **staging** environment is recommended.

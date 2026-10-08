@@ -1,94 +1,96 @@
-# 대시보드
+# Dashboard
 
-웹 화면에서 도메인의 인증서 상태를 보고, 관리자는 도메인과 점검 대상을 관리하고 ACME를 켭니다. 아래에서 `<앱>`은 api 주소입니다([설치](installation.md) 참고). 화면은 `<앱>/`에서 열립니다.
+**English** | [한국어](dashboard.ko.md)
 
-## 누가 무엇을 하나
+The web UI shows the certificate status of your domains; the admin also manages domains and check targets and enables ACME there. Below, `<app>` is the api address (see [Installation](installation.md)). The UI opens at `<app>/`. The UI is available in English and Korean (a server option picks the language); where a button is named below, its Korean label is given in parentheses.
 
-| | 비로그인 | 관리자 (`ADMIN_KEY`로 로그인) |
+## Who can do what
+
+| | Not logged in | Admin (logged in with `ADMIN_KEY`) |
 | --- | --- | --- |
-| 도메인 상태, 점검 결과, 이력, ACME 상태 | 볼 수 있음 | 볼 수 있음 |
-| 도메인·대상 추가·수정·삭제, 지금 점검 | 버튼이 보이지 않음 | 가능 |
-| ACME 켜기·허용 IP 수정·키 재발급·CNAME 확인·끄기 | 버튼이 보이지 않음 | 가능 |
-| 감사 로그 | 볼 수 없음 | 볼 수 있음 |
+| Domain status, check results, history, ACME status | Can view | Can view |
+| Add, edit and delete domains and targets; check now | Buttons are hidden | Allowed |
+| Enable ACME, edit allowed IPs, rotate key, check CNAME, disable ACME | Buttons are hidden | Allowed |
+| Audit log | Cannot view | Can view |
 
-조회는 인증 없이 되므로, 서버 IP와 메모가 화면에 보입니다. 외부에 공개하기 어려우면 앞단 프록시에서 접근을 제한하세요([설정](configuration.md)의 Caddy 예시).
+Viewing requires no authentication, so server IPs and notes are visible in the UI. If you cannot expose them publicly, restrict access at the front proxy (see the Caddy example in [Configuration](configuration.md)).
 
-## 화면
+## Screens
 
-**대시보드(`/`)**: 위쪽 카드는 상태별 도메인 수입니다. 카드를 누르면 그 상태만 보이고, 다시 누르면 풀립니다. 표는 나쁜 상태, 만료가 가까운 순서로 정렬됩니다. 60초마다 자동으로 새로 고칩니다.
+**Dashboard (`/`)**: The cards at the top show the number of domains per status. Clicking a card shows only that status; clicking it again clears the filter. The table is sorted by worst status first, then by nearest expiry. It refreshes automatically every 60 seconds.
 
-**도메인 상세(`/domains/<id>`)**: 대상별로 접속 주소마다 상태, 만료일, 발급자, serial 앞 8자, TLS 버전, 마지막 점검을 보여 줍니다. `이력`을 누르면 그 대상의 최근 점검 50건이 나옵니다. 아래쪽 ACME 패널에는 CNAME 레코드, CNAME 확인 결과, 마지막 TXT 갱신, 연속 실패 횟수, 허용 IP가 있습니다.
+**Domain detail (`/domains/<id>`)**: For each target and each connection address, it shows the status, expiry date, issuer, first 8 characters of the serial, TLS version and last check. Clicking **History** (`이력` in the Korean UI) shows the last 50 checks of that target. The ACME panel at the bottom shows the CNAME record, the CNAME check result, the last TXT update, the number of consecutive failures and the allowed IPs.
 
-**이용 방법(`/guide`)**: 로그인 없이 볼 수 있는 안내입니다. 인증서를 받을 서버에서 실행할 명령 한 줄, 스크립트가 하는 일(자격 증명·허용 IP 확인, acme.sh 설치, 웹서버 지정, 저장 경로, 설정 확인), 웹서버별 설정 예가 있습니다.
+**Usage guide (`/guide`)**: Instructions that can be viewed without logging in. It contains the one-line command to run on the server that receives the certificate, what the script does (checks credentials and allowed IPs, installs acme.sh, selects the web server, sets the storage path, checks the configuration), and configuration examples for each web server.
 
-**감사 로그(`/audit`, 관리자)**: 로그인, 쓰기 작업, ACME 갱신 기록이 최신순으로 나옵니다.
+**Audit log (`/audit`, admin)**: Logins, write operations and ACME updates, newest first.
 
-### 상태와 판정 코드
+### Statuses and result codes
 
-배지는 색과 글자를 함께 씁니다: **긴급**(빨강), **경고**(주황), **정보**(파랑), **정상**(초록), **미점검**(회색). 배지 아래의 `CONNECT_FAILED` 같은 코드에 마우스를 올리면 뜻이 보입니다. 전체 표는 [API 레퍼런스](api.md)에 있습니다.
+Badges use both color and text: **Critical** (red), **Warning** (orange), **Info** (blue), **OK** (green), **Unchecked** (gray); in the Korean UI these are **긴급**, **경고**, **정보**, **정상** and **미점검**. Hover over a code such as `CONNECT_FAILED` under a badge to see what it means. The full table is in the [API reference](api.md).
 
-**`오래됨` 표시**: 마지막 점검이 점검 주기(`CHECK_INTERVAL`)의 2배보다 오래되면 붙습니다(대시보드와 도메인 상세 화면 모두). 상태는 점검할 때 저장되므로, worker가 멈추면 마지막 "정상"이 그대로 남아 보입니다. 이 표시가 보이면 worker를 확인하세요([운영](operations.md)).
+**Stale badge** (`오래됨` in the Korean UI): Shown when the last check is older than twice the check interval (`CHECK_INTERVAL`), on both the dashboard and the domain detail screen. Status is stored at check time, so if the worker stops, the last "OK" keeps showing. If you see this badge, check the worker (see [Operations](operations.md)).
 
-## 관리자 로그인
+## Admin login
 
-`<앱>/admin`으로 들어가 `ADMIN_KEY`를 입력합니다. 상단 바에는 로그인 버튼이 없어서, 관리자는 이 주소를 직접 열어야 합니다(주소를 감추는 것일 뿐 보안 장치는 아닙니다. 보호는 키와 서버의 권한 확인이 합니다). 로그인은 12시간 유지되고, 이미 로그인한 상태로 `/admin`을 열면 대시보드로 돌아갑니다.
+Go to `<app>/admin` and enter `ADMIN_KEY`. The top bar has no login button, so the admin has to open this address directly (this only hides the address and is not a security measure; protection comes from the key and the server's permission checks). A login lasts 12 hours, and opening `/admin` while already logged in takes you back to the dashboard.
 
-- **HTTPS로 접속하세요.** 공개 주소가 `http://`이면 로그인 쿠키에 `Secure`를 붙이지 않아(붙이면 브라우저가 쿠키를 보내지 않습니다) 네트워크에서 쿠키가 보일 수 있습니다.
-- **로그아웃은 브라우저의 쿠키만 지웁니다.** 서버에는 세션이 없어서, 이미 복사된 쿠키는 만료(12시간)까지 유효합니다. 모든 세션을 끊으려면 `ADMIN_KEY`를 바꿔 다시 배포합니다.
-- 틀린 키는 IP당 5번까지 받고, 그 뒤로는 12초에 1번만 받습니다.
-- 세션이 만료된 채로 쓰기를 시도하면 화면이 조회 전용으로 돌아갑니다. 다시 로그인하세요.
+- **Connect over HTTPS.** If the public address is `http://`, the login cookie is not marked `Secure` (if it were, the browser would not send the cookie), so the cookie can be seen on the network.
+- **Log out only deletes the cookie in the browser.** The server keeps no sessions, so a cookie that has already been copied stays valid until it expires (12 hours). To end all sessions, change `ADMIN_KEY` and redeploy.
+- A wrong key is accepted up to 5 times per IP; after that, only 1 attempt every 12 seconds.
+- If you attempt a write after the session has expired, the UI switches back to read-only. Log in again.
 
-## 도메인과 대상 등록
+## Registering domains and targets
 
-1. `도메인 추가`에서 도메인을 입력합니다(와일드카드 없이 `a.com`). 이 단계에서는 ACME가 꺼져 있습니다.
-2. 도메인 상세에서 `대상 추가`로 점검할 TLS 엔드포인트를 등록합니다.
+1. In **Add domain** (`도메인 추가` in the Korean UI), enter the domain without a wildcard (`a.com`). ACME is off at this stage.
+2. On the domain detail screen, use **Add target** (`대상 추가` in the Korean UI) to register the TLS endpoint to check.
 
-| 항목 | 설명 |
+| Field | Description |
 | --- | --- |
-| 호스트명, 포트 | 필수. 예: `www.a.com`, `443` |
-| SNI | 비우면 호스트명을 씁니다 |
-| 서버 IP | 비우면 호스트명으로 한 번만 접속합니다(DNS가 여러 주소를 줘도 하나만 점검). 적으면 IP마다 따로 접속해, 서버마다 같은 인증서가 깔렸는지 비교합니다. 최대 16개 |
+| Hostname, port | Required. Example: `www.a.com`, `443` |
+| SNI | If empty, the hostname is used |
+| Server IPs | If empty, it connects once using the hostname (only one address is checked even if DNS returns several). If set, it connects to each IP separately and compares whether every server has the same certificate installed. Up to 16 |
 
-저장하면 바로 한 번 점검해서 결과를 보여 줍니다. 그 뒤로는 worker가 `CHECK_INTERVAL`(기본 6시간)마다 점검합니다. 접속 설정을 바꾸면 옛 주소의 결과는 더 이상 보이지 않습니다.
+Saving runs one check immediately and shows the result. After that, the worker checks every `CHECK_INTERVAL` (default 6 hours). If you change the connection settings, results for the old addresses are no longer shown.
 
-## ACME 켜기
+## Enabling ACME
 
-도메인 상세의 ACME 패널에서 `ACME 켜기`를 누릅니다.
+In the ACME panel on the domain detail screen, click **Enable ACME** (`ACME 켜기` in the Korean UI).
 
-1. **허용 IP**를 입력합니다. 인증서를 받을 서버의 IP나 CIDR입니다. 키가 새어도 다른 곳에서는 못 쓰게 가능한 한 지정하세요.
-2. 켜면 **한 번만 보이는 창**이 뜹니다. CNAME 레코드, username·password, 서버에서 실행할 명령 한 줄이 들어 있습니다. **이 창을 닫으면 password를 다시 볼 수 없습니다.** Esc로는 닫히지 않고, 버튼으로만 닫힙니다.
-3. 도메인의 DNS에 CNAME 한 줄을 등록하고, 패널의 `CNAME 지금 확인`으로 `CNAME 정상`이 되는지 봅니다.
-4. 인증서를 받을 서버에서 창의 명령을 실행합니다(`curl -fsSL <앱>/acme/setup.sh -o setup.sh && bash setup.sh`). 스크립트가 값을 물어보고(password는 입력해도 보이지 않아 셸 기록에 남지 않습니다), 이 서버의 허용 IP, acme.sh 설치, 웹서버 종류와 설치 위치, 도메인의 CNAME 등록 여부, 인증서 저장 경로를 확인한 뒤 발급과 설치까지 합니다. 웹서버가 감지되지 않거나 직접 reload하려면 `manual`을 골라 reload 스크립트를 입력합니다. reload에 `sudo`가 필요한 서버는 root 셸(`sudo -i`)에서 실행하세요(자동 갱신 cron은 sudo 비밀번호를 입력할 수 없습니다). 자세한 흐름은 [도메인 연결과 인증서 발급](onboarding.md)에 있습니다.
-5. 발급이 되면 패널의 `마지막 TXT 갱신`이 채워집니다.
+1. Enter the **allowed IPs**: the IPs or CIDRs of the servers that will receive the certificate. Specify them whenever possible, so that a leaked key cannot be used from anywhere else.
+2. After enabling, a **dialog that is shown only once** appears. It contains the CNAME record, the username and password, and the one-line command to run on the server. **Once you close this dialog, you cannot see the password again.** It does not close with Esc; it closes only with its button.
+3. Add the one CNAME record to the domain's DNS, then use **Check CNAME now** (`CNAME 지금 확인` in the Korean UI) in the panel and confirm that it shows CNAME OK (`CNAME 정상` in the Korean UI).
+4. Run the command from the dialog on the server that receives the certificate (`curl -fsSL <app>/acme/setup.sh -o setup.sh && bash setup.sh`). The script asks for values (the password is not shown as you type it and does not end up in the shell history), checks this server's allowed IP, the acme.sh installation, the web server type and install location, whether the domain's CNAME is in place, and the certificate storage path, and then issues and installs the certificate. If no web server is detected or you want to reload it yourself, choose `manual` and enter a reload script. On servers where reload needs `sudo`, run it from a root shell (`sudo -i`) (the automatic renewal cron cannot enter a sudo password). The full flow is described in [Connecting a domain and issuing certificates](onboarding.md).
+5. Once issuance succeeds, the panel's last TXT update (`마지막 TXT 갱신` in the Korean UI) is filled in.
 
-**키 재발급**: 옛 키는 즉시 무효가 되고 서브도메인(CNAME)은 그대로입니다. 서버에서 `FORCE=1 bash setup.sh`로 스크립트를 다시 실행하고 새 password를 입력해야 새 키가 acme.sh 설정에 저장됩니다(창의 명령에 `FORCE=1`이 붙어 있습니다). 그렇지 않으면 다음 자동 갱신이 401로 실패합니다.
+**Rotate key** (`키 재발급` in the Korean UI): The old key becomes invalid immediately, and the subdomain (CNAME) stays the same. You must run the script again on the server with `FORCE=1 bash setup.sh` and enter the new password for the new key to be saved in the acme.sh configuration (the command in the dialog already includes `FORCE=1`). Otherwise the next automatic renewal fails with 401.
 
-**ACME 끄기**: 계정을 폐기하고 챌린지 TXT를 지웁니다. 다시 켜면 서브도메인이 새로 생기므로 CNAME을 다시 걸어야 합니다.
+**Disable ACME** (`ACME 끄기` in the Korean UI): Revokes the account and deletes the challenge TXT. If you enable it again, a new subdomain is created, so you have to set up the CNAME again.
 
-## 에이전트를 위한 `/llms.txt`
+## `/llms.txt` for agents
 
-`<앱>/llms.txt`는 에이전트가 이 서버로 ACME를 구성할 때 따라 할 절차를 담은 텍스트입니다. 이 서버의 주소(`PUBLIC_URL`, 비어 있으면 요청에서 만든 값)와 챌린지 존(`CHALLENGE_ZONE`)이 채워져 있고, 인증 없이 읽을 수 있습니다. 에이전트에게 이 주소를 알려 주고 관리자 키만 따로 전달하세요. 키를 채팅이나 티켓에 붙여 넣지 않는 것이 안전합니다.
+`<app>/llms.txt` is a text file with the procedure an agent should follow to set up ACME with this server. It is filled in with this server's address (`PUBLIC_URL`, or a value built from the request if empty) and the challenge zone (`CHALLENGE_ZONE`), and it can be read without authentication. Give the agent this address and pass the admin key to it separately. It is safer not to paste the key into chats or tickets.
 
-## 로컬에서 띄워 보기
+## Trying it locally
 
-Docker가 있으면 메모리 공급자(실제 DNS에 기록하지 않음)로 바로 띄울 수 있습니다.
+If you have Docker, you can start it right away with the memory provider (nothing is written to real DNS).
 
 ```bash
 docker compose -p sslchk-demo -f deploy/compose.yaml -f deploy/compose.ports.yaml \
   --env-file deploy/local.env.example up -d --build
-# http://127.0.0.1:18090 을 열고, deploy/local.env.example의 ADMIN_KEY로 로그인
+# open http://127.0.0.1:18090 and log in with the ADMIN_KEY from deploy/local.env.example
 docker compose -p sslchk-demo -f deploy/compose.yaml -f deploy/compose.ports.yaml \
   --env-file deploy/local.env.example down -v
 ```
 
-## 화면 개발
+## UI development
 
-화면은 `web/`의 React + Vite + TypeScript입니다. Node 24가 필요합니다.
+The UI is React + Vite + TypeScript in `web/`. It requires Node 24.
 
 ```bash
-make web-test      # 로직 테스트(node --test)
-make web-build     # 타입 검사 + 빌드. 결과는 internal/webui/dist로 가서 바이너리에 내장됩니다
-cd web && npm run dev   # 개발 서버(:5173). /api는 로컬 ssl-checker serve(:8080)로 넘어갑니다
+make web-test      # logic tests (node --test)
+make web-build     # type check + build; the output goes to internal/webui/dist and is embedded in the binary
+cd web && npm run dev   # dev server (:5173); /api is proxied to a local ssl-checker serve (:8080)
 ```
 
-Docker 이미지는 빌드할 때 화면의 테스트와 빌드를 먼저 돌리므로, 둘 중 하나가 실패하면 이미지가 만들어지지 않습니다. 화면을 빌드하지 않고 `go build`만 한 바이너리는 `<앱>/`에 "화면이 빌드되지 않았습니다" 안내(503)를 보여 주며, API와 `/llms.txt`는 그대로 동작합니다.
+The Docker image runs the UI tests and build first, so if either fails, the image is not built. A binary built with `go build` alone, without building the UI, shows a notice at `<app>/` that the UI has not been built (503), while the API and `/llms.txt` keep working.

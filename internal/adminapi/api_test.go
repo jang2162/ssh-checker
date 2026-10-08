@@ -21,6 +21,7 @@ import (
 	"ssl-checker/internal/db/dbtest"
 	"ssl-checker/internal/dnsprovider/memory"
 	"ssl-checker/internal/httpx"
+	"ssl-checker/internal/lang"
 	"ssl-checker/internal/monitor"
 	"ssl-checker/internal/store"
 )
@@ -40,7 +41,10 @@ type fixture struct {
 	svc *acmedns.Service
 }
 
-func newFixture(t *testing.T) *fixture {
+// newFixture는 한국어(ko) 화면·스크립트 기준 fixture다. 영어 동작은 newFixtureLang(t, lang.EN)로 시험한다.
+func newFixture(t *testing.T) *fixture { return newFixtureLang(t, lang.KO) }
+
+func newFixtureLang(t *testing.T, l lang.Lang) *fixture {
 	pool := dbtest.New(t)
 	st := store.New(pool)
 	mem := memory.New()
@@ -52,7 +56,7 @@ func newFixture(t *testing.T) *fixture {
 		Auth:   adminapi.NewAuth(adminKey),
 		CNAME:  &cnamecheck.Checker{Resolver: "127.0.0.1:1", Timeout: 200 * time.Millisecond},
 		IP:     httpx.ClientIP{Trusted: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}},
-		Now:    func() time.Time { return now }, Log: log,
+		Now:    func() time.Time { return now }, Log: log, Lang: l,
 	}
 	mux := http.NewServeMux()
 	api.Register(mux)
@@ -394,7 +398,7 @@ func TestCodes(t *testing.T) {
 		Codes []struct{ Code, Status, Meaning string }
 	}
 	f.getJSON("/api/codes", &out)
-	want := monitor.Codes()
+	want := monitor.Codes(lang.KO)
 	if len(out.Codes) != len(want) {
 		t.Fatalf("codes = %d, want %d", len(out.Codes), len(want))
 	}

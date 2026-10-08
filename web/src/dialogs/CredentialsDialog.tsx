@@ -3,6 +3,7 @@ import { CopyButton } from "../components/CopyButton.tsx";
 import { Dialog } from "../components/Dialog.tsx";
 import { Notice } from "../components/Notice.tsx";
 import { ServerScripts } from "../components/ServerScripts.tsx";
+import { T, t } from "../i18n/index.ts";
 
 interface Props {
   kind: "enable" | "rotate";
@@ -16,15 +17,15 @@ interface Props {
  */
 export function CredentialsDialog({ kind, creds, onClose }: Props) {
   return (
-    <Dialog title={kind === "enable" ? "ACME를 켰습니다" : "키를 재발급했습니다"} onClose={onClose} wide persistent>
+    <Dialog title={kind === "enable" ? t("creds.titleEnable") : t("creds.titleRotate")} onClose={onClose} wide persistent>
       <Notice kind="warning">
-        <strong>이 창을 닫으면 비밀번호를 다시 볼 수 없습니다.</strong> 지금 서버에 설정하세요. 잃어버리면 키를 재발급해야 합니다.
+        <T k="creds.warning" />
       </Notice>
 
       {kind === "enable" ? (
         <section className="dialog-section">
-          <h3>1. CNAME 레코드 등록</h3>
-          <p>도메인의 DNS에 아래 한 줄을 등록합니다. 한 번만 하면 됩니다.</p>
+          <h3>{t("creds.cnameHeading")}</h3>
+          <p>{t("creds.cnameBody")}</p>
           <div className="copy-row">
             <code>{creds.cname_record}</code>
             <CopyButton text={creds.cname_record} />
@@ -32,13 +33,13 @@ export function CredentialsDialog({ kind, creds, onClose }: Props) {
         </section>
       ) : (
         <section className="dialog-section">
-          <h3>CNAME은 그대로입니다</h3>
-          <p>서브도메인이 같아서 DNS는 바꾸지 않아도 됩니다.</p>
+          <h3>{t("creds.cnameSameHeading")}</h3>
+          <p>{t("creds.cnameSameBody")}</p>
         </section>
       )}
 
       <section className="dialog-section">
-        <h3>{kind === "enable" ? "2. " : ""}자격 증명</h3>
+        <h3>{kind === "enable" ? "2. " : ""}{t("creds.credentials")}</h3>
         <dl className="kv">
           <dt>username</dt>
           <dd><code>{creds.username}</code> <CopyButton text={creds.username} /></dd>
@@ -46,28 +47,27 @@ export function CredentialsDialog({ kind, creds, onClose }: Props) {
           <dd><code>{creds.password}</code> <CopyButton text={creds.password} /></dd>
           <dt>subdomain</dt>
           <dd><code>{creds.subdomain}</code></dd>
-          <dt>허용 IP</dt>
-          <dd>{creds.allowfrom.length > 0 ? creds.allowfrom.join(", ") : "제한 없음"}</dd>
+          <dt>{t("common.allowedIps")}</dt>
+          <dd>{creds.allowfrom.length > 0 ? creds.allowfrom.join(", ") : t("common.unrestricted")}</dd>
         </dl>
       </section>
 
       <section className="dialog-section">
-        <h3>{kind === "enable" ? "3. " : ""}인증서를 받을 서버에서 실행</h3>
+        <h3>{kind === "enable" ? "3. " : ""}{t("creds.runHeading")}</h3>
         {creds.rotated && (
           <Notice kind="warning">
-            새 키를 acme.sh 설정에 저장하려면 아래 명령을 서버에서 다시 실행해야 합니다(<code>FORCE=1</code>이 붙어 있습니다).
-            그렇지 않으면 다음 자동 갱신이 401로 실패합니다.
+            <T k="creds.rotatedNotice" />
           </Notice>
         )}
         <p>
-          실행하면 <strong>username, password</strong>를 물어봅니다. 허용 IP, acme.sh, 웹서버, CNAME, 저장 경로는 스크립트가 확인합니다.
+          <T k="creds.prompts" />
         </p>
-        <p className="muted small-text">웹서버가 감지되지 않으면 <code>manual</code>을 골라 reload 스크립트를 입력하세요.</p>
+        <p className="muted small-text"><T k="creds.manual" /></p>
         <ServerScripts setup={creds.setup.setup} servers={creds.setup.servers} force={creds.rotated} />
       </section>
 
       <div className="actions">
-        <button type="button" className="btn primary" onClick={onClose}>비밀번호를 저장했습니다. 닫기</button>
+        <button type="button" className="btn primary" onClick={onClose}>{t("creds.close")}</button>
       </div>
     </Dialog>
   );

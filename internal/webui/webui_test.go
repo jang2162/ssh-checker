@@ -6,10 +6,12 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+
+	"ssl-checker/internal/lang"
 )
 
 var built = fstest.MapFS{
-	"index.html":     {Data: []byte("<!doctype html><title>app</title>")},
+	"index.html":     {Data: []byte(`<!doctype html><html lang="ko"><title>app</title>`)},
 	"assets/app.js":  {Data: []byte("console.log(1)")},
 	"assets/app.css": {Data: []byte("body{}")},
 	".keep":          {Data: nil},
@@ -25,7 +27,7 @@ func do(h http.Handler, method, path string) *httptest.ResponseRecorder {
 }
 
 func TestServesIndexWithSecurityHeaders(t *testing.T) {
-	rec := do(New(next, built), "GET", "/")
+	rec := do(New(next, built, lang.KO), "GET", "/")
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "<title>app</title>") {
 		t.Fatalf("/ = %d %q", rec.Code, rec.Body)
 	}
@@ -45,14 +47,14 @@ func TestServesIndexWithSecurityHeaders(t *testing.T) {
 
 func TestIndexHTMLIsNotRedirected(t *testing.T) {
 	// http.ServeFile은 /index.html을 ./로 되돌린다. 우리는 그렇게 하지 않는다.
-	if rec := do(New(next, built), "GET", "/index.html"); rec.Code != 200 {
+	if rec := do(New(next, built, lang.KO), "GET", "/index.html"); rec.Code != 200 {
 		t.Fatalf("/index.html = %d", rec.Code)
 	}
 }
 
 func TestSPAFallback(t *testing.T) {
 	for _, p := range []string{"/domains/3", "/audit", "/anything/else"} {
-		rec := do(New(next, built), "GET", p)
+		rec := do(New(next, built, lang.KO), "GET", p)
 		if rec.Code != 200 || !strings.Contains(rec.Body.String(), "<title>app</title>") {
 			t.Errorf("%s = %d %q", p, rec.Code, rec.Body)
 		}
@@ -60,7 +62,7 @@ func TestSPAFallback(t *testing.T) {
 }
 
 func TestAssetsAreImmutableAndTyped(t *testing.T) {
-	rec := do(New(next, built), "GET", "/assets/app.js")
+	rec := do(New(next, built, lang.KO), "GET", "/assets/app.js")
 	if rec.Code != 200 || rec.Body.String() != "console.log(1)" {
 		t.Fatalf("app.js = %d %q", rec.Code, rec.Body)
 	}
@@ -70,27 +72,27 @@ func TestAssetsAreImmutableAndTyped(t *testing.T) {
 	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "javascript") {
 		t.Fatalf("content-type = %q", ct)
 	}
-	if ct := do(New(next, built), "GET", "/assets/app.css").Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/css") {
+	if ct := do(New(next, built, lang.KO), "GET", "/assets/app.css").Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/css") {
 		t.Fatalf("css content-type = %q", ct)
 	}
 }
 
 func TestMissingAssetIs404NotHTML(t *testing.T) {
-	rec := do(New(next, built), "GET", "/assets/missing.js")
+	rec := do(New(next, built, lang.KO), "GET", "/assets/missing.js")
 	if rec.Code != 404 || strings.Contains(rec.Body.String(), "<title>") {
 		t.Fatalf("missing asset = %d %q", rec.Code, rec.Body)
 	}
 }
 
 func TestDotFilesAreNotServed(t *testing.T) {
-	rec := do(New(next, built), "GET", "/.keep")
+	rec := do(New(next, built, lang.KO), "GET", "/.keep")
 	if !strings.Contains(rec.Body.String(), "<title>app</title>") {
 		t.Fatalf("/.keep = %d %q (index로 폴백해야 한다)", rec.Code, rec.Body)
 	}
 }
 
 func TestReservedPathsGoToNext(t *testing.T) {
-	h := New(next, built)
+	h := New(next, built, lang.KO)
 	for _, p := range []string{"/api", "/api/summary", "/api/nope", "/update", "/register", "/health", "/llms.txt"} {
 		if rec := do(h, "GET", p); rec.Code != http.StatusTeapot {
 			t.Errorf("GET %s = %d, want next", p, rec.Code)
@@ -99,7 +101,7 @@ func TestReservedPathsGoToNext(t *testing.T) {
 }
 
 func TestOtherMethodsGoToNext(t *testing.T) {
-	h := New(next, built)
+	h := New(next, built, lang.KO)
 	for _, m := range []string{"POST", "PUT", "PATCH", "DELETE"} {
 		if rec := do(h, m, "/"); rec.Code != http.StatusTeapot {
 			t.Errorf("%s / = %d, want next", m, rec.Code)
@@ -108,7 +110,7 @@ func TestOtherMethodsGoToNext(t *testing.T) {
 }
 
 func TestHeadHasNoBody(t *testing.T) {
-	rec := do(New(next, built), "HEAD", "/")
+	rec := do(New(next, built, lang.KO), "HEAD", "/")
 	if rec.Code != 200 || rec.Body.Len() != 0 {
 		t.Fatalf("HEAD / = %d %q", rec.Code, rec.Body)
 	}
@@ -116,7 +118,7 @@ func TestHeadHasNoBody(t *testing.T) {
 
 func TestPlaceholderWhenNotBuilt(t *testing.T) {
 	empty := fstest.MapFS{".keep": {}}
-	rec := do(New(next, empty), "GET", "/")
+	rec := do(New(next, empty, lang.KO), "GET", "/")
 	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "npm run build") {
 		t.Fatalf("placeholder = %d %q", rec.Code, rec.Body)
 	}
@@ -124,18 +126,30 @@ func TestPlaceholderWhenNotBuilt(t *testing.T) {
 		t.Fatalf("content-type = %q", ct)
 	}
 	// 화면 경로도 같은 안내를 보여 주고, API 경로는 그대로 next로 간다.
-	if rec := do(New(next, empty), "GET", "/domains/1"); rec.Code != http.StatusServiceUnavailable {
+	if rec := do(New(next, empty, lang.KO), "GET", "/domains/1"); rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("/domains/1 = %d", rec.Code)
 	}
-	if rec := do(New(next, empty), "GET", "/api/summary"); rec.Code != http.StatusTeapot {
+	if rec := do(New(next, empty, lang.KO), "GET", "/api/summary"); rec.Code != http.StatusTeapot {
 		t.Fatalf("/api/summary = %d", rec.Code)
 	}
 }
 
 func TestEmbeddedDistBuilds(t *testing.T) {
 	// 저장소에는 dist/.keep만 있어도(또는 화면을 빌드했어도) Handler가 만들어지고 응답한다.
-	rec := do(Handler(next), "GET", "/")
+	rec := do(Handler(next, lang.KO), "GET", "/")
 	if rec.Code != 200 && rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("/ = %d", rec.Code)
+	}
+}
+
+// The server decides the dashboard language: index.html carries it in <html lang>, and the SPA reads it.
+func TestIndexCarriesServerLanguage(t *testing.T) {
+	for l, want := range map[lang.Lang]string{lang.EN: `<html lang="en"`, lang.KO: `<html lang="ko"`} {
+		for _, p := range []string{"/", "/domains/1", "/admin"} {
+			rec := do(New(next, built, l), "GET", p)
+			if !strings.Contains(rec.Body.String(), want) {
+				t.Errorf("%s %s: %q not found in %q", l, p, want, rec.Body)
+			}
+		}
 	}
 }

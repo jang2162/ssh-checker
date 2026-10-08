@@ -3,6 +3,8 @@ package monitor
 import (
 	"slices"
 	"strings"
+
+	"ssl-checker/internal/lang"
 )
 
 // CodeInfo는 판정 코드 하나의 설명이다. 화면(/api/codes)과 /llms.txt가 같은 표를 쓴다.
@@ -12,8 +14,8 @@ type CodeInfo struct {
 	Meaning string `json:"meaning"`
 }
 
-// codeMeanings는 코드별 한국어 설명이다. 새 코드를 만들면 여기에도 적는다(테스트가 빠진 코드를 잡는다).
-var codeMeanings = map[string]string{
+// codeMeaningsKO는 코드별 한국어 설명이다. 새 코드를 만들면 여기에도 적는다(테스트가 빠진 코드를 잡는다).
+var codeMeaningsKO = map[string]string{
 	CodeConnectFailed:    "접속이나 TLS 핸드셰이크에 실패했습니다(10초 제한). 아주 오래된 서버도 여기로 나오니 error 필드를 확인합니다.",
 	CodeCertExpired:      "인증서가 만료됐습니다.",
 	CodeCertExpiresSoon:  "만료까지 min(7일, 수명의 1/3) 미만 남았습니다.",
@@ -29,11 +31,37 @@ var codeMeanings = map[string]string{
 	CodeNotChecked:       "아직 점검 결과가 없습니다.",
 }
 
-// Codes는 모든 판정 코드를 나쁜 상태부터 돌려준다. 같은 상태 안에서는 코드 이름순이다.
-func Codes() []CodeInfo {
+// codeMeaningsEN는 코드별 영어 설명이다. 한국어 표와 같은 코드를 모두 담아야 한다(테스트가 확인한다).
+var codeMeaningsEN = map[string]string{
+	CodeConnectFailed:    "The connection or TLS handshake failed (10 second limit). Very old servers also end up here, so check the error field.",
+	CodeCertExpired:      "The certificate has expired.",
+	CodeCertExpiresSoon:  "Less than min(7 days, 1/3 of the lifetime) is left until expiry.",
+	CodeChainInvalid:     "Certificate chain verification failed (including self-signed certificates).",
+	CodeHostnameMismatch: "The certificate does not cover the name that was connected to.",
+	CodeRenewalOverdue:   "Less than 1/3 of the lifetime is left. A healthy setup would have renewed by now.",
+	CodeTLSOutdated:      "TLS older than 1.2 was negotiated.",
+	CodeSerialMismatch:   "Servers of the same target serve different certificates (the deployment missed some servers).",
+	CodeCNAMEMissing:     "ACME is enabled but the _acme-challenge CNAME does not exist.",
+	CodeCNAMEMismatch:    "The _acme-challenge CNAME points somewhere else.",
+	CodeTXTUpdateFailing: "/update failed 3 or more times in a row (DNS provider or database error).",
+	CodeWeakKey:          "The key is RSA smaller than 2048 bits or ECDSA smaller than 256 bits.",
+	CodeNotChecked:       "There is no check result yet.",
+}
+
+// meanings는 언어에 맞는 설명 표다.
+func meanings(l lang.Lang) map[string]string {
+	if l == lang.KO {
+		return codeMeaningsKO
+	}
+	return codeMeaningsEN
+}
+
+// Codes는 모든 판정 코드를 나쁜 상태부터 돌려준다. 같은 상태 안에서는 코드 이름순이고, 설명은 l 언어다.
+func Codes(l lang.Lang) []CodeInfo {
 	out := make([]CodeInfo, 0, len(codeStatus))
+	m := meanings(l)
 	for code, st := range codeStatus {
-		out = append(out, CodeInfo{Code: code, Status: st, Meaning: codeMeanings[code]})
+		out = append(out, CodeInfo{Code: code, Status: st, Meaning: m[code]})
 	}
 	slices.SortFunc(out, func(a, b CodeInfo) int {
 		if d := b.Status.rank() - a.Status.rank(); d != 0 {

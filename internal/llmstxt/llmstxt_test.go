@@ -3,14 +3,20 @@ package llmstxt
 import (
 	"net/http"
 	"net/http/httptest"
+	"regexp"
+	"sort"
 	"strings"
 	"testing"
 
+	"ssl-checker/internal/lang"
 	"ssl-checker/internal/monitor"
 )
 
 func render(t *testing.T, d Data) string {
 	t.Helper()
+	if d.Lang == "" {
+		d.Lang = lang.KO // 이 파일의 기존 시험은 한국어 본문 기준이다. 영어는 아래 TestEnglish*가 맡는다.
+	}
 	out, err := Render(d)
 	if err != nil {
 		t.Fatal(err)
@@ -65,7 +71,7 @@ func TestRenderHasRequiredSections(t *testing.T) {
 
 func TestRenderListsEveryStatusCode(t *testing.T) {
 	out := render(t, Data{BaseURL: "https://x", Zone: "z.test"})
-	for _, c := range monitor.Codes() {
+	for _, c := range monitor.Codes(lang.KO) {
 		if !strings.Contains(out, "| `"+c.Code+"` | "+string(c.Status)+" | "+c.Meaning+" |") {
 			t.Errorf("code %s not listed with its status and meaning", c.Code)
 		}
@@ -89,7 +95,7 @@ func TestRenderNeverContainsSecrets(t *testing.T) {
 }
 
 func TestHandler(t *testing.T) {
-	h := Handler("z.test", func(r *http.Request) string { return "https://" + r.Host })
+	h := Handler("z.test", lang.KO, func(r *http.Request) string { return "https://" + r.Host })
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/llms.txt", nil)
 	req.Host = "ssl.example.com"
@@ -102,5 +108,87 @@ func TestHandler(t *testing.T) {
 	}
 	if body := rec.Body.String(); !strings.Contains(body, "https://ssl.example.com/api/domains") || !strings.Contains(body, "z.test") {
 		t.Fatalf("body = %q", body[:200])
+	}
+}
+
+var directiveRE = regexp.MustCompile(`\{\{[^}]*\}\}`)
+
+func sortedDirectives(s string) []string {
+	d := directiveRE.FindAllString(s, -1)
+	sort.Strings(d)
+	return d
+}
+
+// 두 언어 템플릿은 같은 구조다: 같은 {{ }} 지시어, 같은 절 개수, 같은 코드 블록 수, 같은 환경변수.
+func TestTemplatesShareStructure(t *testing.T) {
+	ko, en := sourceKO, sourceEN
+	if strings.Join(sortedDirectives(ko), "|") != strings.Join(sortedDirectives(en), "|") {
+		t.Errorf("template directives differ:\nko %v\nen %v", sortedDirectives(ko), sortedDirectives(en))
+	}
+	for _, marker := range []string{"\n## ", "\n### ", "\n```"} {
+		if a, b := strings.Count(ko, marker), strings.Count(en, marker); a != b {
+			t.Errorf("%q count differs: ko %d, en %d", strings.TrimSpace(marker), a, b)
+		}
+	}
+	envRE := regexp.MustCompile(`\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b`)
+	kos, ens := map[string]bool{}, map[string]bool{}
+	for _, m := range envRE.FindAllString(ko, -1) {
+		kos[m] = true
+	}
+	for _, m := range envRE.FindAllString(en, -1) {
+		ens[m] = true
+	}
+	for v := range kos {
+		if !ens[v] {
+			t.Errorf("%s is in the Korean llms.txt but not in the English one", v)
+		}
+	}
+}
+
+func TestEnglishRender(t *testing.T) {
+	out := render(t, Data{BaseURL: "https://ssl.example.com", Zone: "acme.example.com", Lang: lang.EN})
+	if hangul := regexp.MustCompile("[가-힣]").FindString(out); hangul != "" {
+		t.Errorf("English llms.txt contains Hangul near %q", hangul)
+	}
+	if !strings.HasPrefix(out, "# ssl-checker\n\n> ") {
+		t.Fatalf("llms.txt format (H1, summary quote) broken: %.40q", out)
+	}
+	for _, h := range []string{
+		"## How it works", "## Admin authentication", "## ACME setup procedure", "### 1. Register the domain", "### 2. Enable ACME",
+		"### 3. Register and verify the CNAME", "### 4. Issue on the server that receives the certificate", "### 5. Verify and register monitoring",
+		"## Rotating keys, changing allowed IPs, disabling", "## Status rules", "## Common errors and fixes", "## Monitoring API", "## Do not",
+	} {
+		if !strings.Contains(out, h+"\n") {
+			t.Errorf("missing section %q", h)
+		}
+	}
+	for _, want := range []string{"https://ssl.example.com/api/domains", "acme.example.com", "curl -fsSL https://ssl.example.com/acme/setup.sh -o setup.sh", "ACMEDNS_BASE_URL=https://ssl.example.com/acme"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("English llms.txt missing %q", want)
+		}
+	}
+	for _, c := range monitor.Codes(lang.EN) {
+		if !strings.Contains(out, "| `"+c.Code+"` | "+string(c.Status)+" | "+c.Meaning+" |") {
+			t.Errorf("code %s not listed with its English meaning", c.Code)
+		}
+	}
+	// 기본 언어는 영어이고, 주소를 모르면 영어 자리표시자를 쓴다.
+	def := render(t, Data{Zone: "z.test", Lang: lang.EN})
+	if !strings.Contains(def, "<ssl-checker address>") || strings.Contains(def, "<ssl-checker 주소>") {
+		t.Error("English placeholder missing")
+	}
+	if got, err := Render(Data{BaseURL: "https://x", Zone: "z"}); err != nil || strings.Contains(got, "서버 주소") {
+		t.Errorf("default language should be English: %v", err)
+	}
+}
+
+func TestEnglishHandler(t *testing.T) {
+	h := Handler("z.test", lang.EN, func(r *http.Request) string { return "https://" + r.Host })
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/llms.txt", nil)
+	req.Host = "ssl.example.com"
+	h.ServeHTTP(rec, req)
+	if body := rec.Body.String(); rec.Code != 200 || !strings.Contains(body, "## How it works") || regexp.MustCompile("[가-힣]").MatchString(body) {
+		t.Fatalf("English handler: %d %.200q", rec.Code, body)
 	}
 }

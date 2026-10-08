@@ -103,6 +103,7 @@ func newServeHandler(cfg config.Config, pool *pgxpool.Pool, provider dnsprovider
 		CNAME:  &cnamecheck.Checker{Resolver: cfg.DNSResolver},
 		Auth:   adminapi.NewAuthShared(cfg.AdminKey, adminFailures),
 		Log:    slog.Default(),
+		Lang:   cfg.Language,
 	}
 
 	// acme-dns 경로는 기존 핸들러에 그대로 넘기고, /api와 /llms.txt는 같은 mux에 붙인다.
@@ -115,6 +116,6 @@ func newServeHandler(cfg config.Config, pool *pgxpool.Pool, provider dnsprovider
 	mux.Handle("POST /register", legacy)
 	mux.Handle("GET /health", legacy)
 	api.Register(mux)
-	mux.Handle("GET /llms.txt", llmstxt.Handler(cfg.ChallengeZone, api.PublicURLFor))
-	return webui.Handler(mux)
+	mux.Handle("GET /llms.txt", llmstxt.Handler(cfg.ChallengeZone, cfg.Language, api.PublicURLFor))
+	return webui.Handler(mux, cfg.Language)
 }

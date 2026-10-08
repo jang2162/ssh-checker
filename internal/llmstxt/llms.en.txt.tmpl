@@ -1,0 +1,193 @@
+# ssl-checker
+
+> A certificate monitoring server. As an add-on, it provides acme-dns compatible DNS-01 validation delegation (CNAME delegation). With it, acme.sh can issue and renew Let's Encrypt certificates, including wildcards, even for domains whose DNS has no API.
+
+This document is the procedure an agent follows, exactly as written, to set up ACME with this server.
+
+- Server address: {{.BaseURL}}
+- Challenge zone: {{.Zone}} (challenge TXT records are written to `<uuid>.{{.Zone}}`)
+
+## How it works
+
+1. For each domain, a CNAME is registered **once** at `_acme-challenge.<domain>`. Its target is `<uuid>.{{.Zone}}`, which this server assigns. Nothing else in the domain's DNS is touched besides this one record.
+2. On the server that receives the certificate, acme.sh sends the TXT value it got from Let's Encrypt to this server's `/acme/update` (the old `/update` behaves the same). acme.sh's `dns_acmedns` plugin does this automatically.
+3. This server writes the TXT to `<uuid>.{{.Zone}}` (it keeps the 2 most recent values: both are needed when `a.com` and `*.a.com` are issued in one certificate). Let's Encrypt follows the CNAME and checks the TXT.
+4. The certificate and private key are created and stored by acme.sh on each server. This server never sees the private key.
+
+## Admin authentication
+
+The admin API requires the admin key (`ADMIN_KEY`). Send it in the header `Authorization: Bearer <ADMIN_KEY>`.
+
+- The key must be provided by a human. Do not make one up or guess it.
+- A wrong key is accepted up to 5 times per IP; after that, only 1 attempt every 12 seconds (429 `too_many_attempts`).
+- A locked-out IP gets 429 until the lockout ends, even if it sends the correct Bearer key.
+- Write requests (POST, PATCH, DELETE) require the header `Content-Type: application/json`, even when there is no body (otherwise 415).
+- Status reads (GET) work without a key (the only exception is `GET /api/audit`). Error responses have the form `{"error":"<code>"}`.
+
+The examples below assume the `ADMIN_KEY` environment variable is set.
+
+```sh
+A="Authorization: Bearer $ADMIN_KEY"
+J="Content-Type: application/json"
+```
+
+## ACME setup procedure
+
+### 1. Register the domain
+
+```sh
+curl -sS -X POST {{.BaseURL}}/api/domains -H "$A" -H "$J" -d '{"fqdn":"a.com"}'
+```
+
+Use the `id` from the response as `<id>` in the following steps. If the domain is already registered, the response is 409 `domain_exists`. In that case, find the `id` of the entry with the same `fqdn` in `curl -sS {{.BaseURL}}/api/domains`. Write the domain without a wildcard, as in `a.com`. `*.a.com` is handled by the same CNAME.
+
+### 2. Enable ACME
+
+```sh
+curl -sS -X POST {{.BaseURL}}/api/domains/<id>/acme -H "$A" -H "$J" -d '{"allowfrom":["203.0.113.10/32"]}'
+```
+
+`allowfrom` is the list of IPs or CIDRs of the servers allowed to call `/acme/update` (up to 64). Specify it whenever possible, so that a leaked key cannot be used from anywhere else. An empty list `[]` allows calls from anywhere.
+
+The response (201) contains `username`, `password`, `subdomain`, `fulldomain`, `cname_record`, `allowfrom`, `setup` (the script and the command to run it) and `rotated`.
+
+- **`password` is shown only in this response.** There is no way to retrieve it again; if it is lost, rotate the key.
+- Do not put the response in logs, tickets or chats.
+- The script in `setup` contains no secrets. In step 4, pass `username` and `password` as environment variables (the server provides `subdomain`).
+- If ACME is already enabled, the response is 409 `acme_enabled`.
+
+### 3. Register and verify the CNAME
+
+Add the `cname_record` from the response to the DNS of the domain (`a.com`). It is a single record.
+
+```text
+_acme-challenge.a.com.  CNAME  <uuid>.{{.Zone}}.
+```
+
+This is done in a DNS console, so a human may have to do it. After it is registered, verify it.
+
+```sh
+curl -sS -X POST {{.BaseURL}}/api/domains/<id>/acme/check -H "$A" -H "$J"
+```
+
+It is done when `cname_status` in the response is `ok`.
+
+| `cname_status` | Meaning |
+| --- | --- |
+| `ok` | The CNAME points to the name this server assigned |
+| `missing` | There is no CNAME. DNS propagation can take a few minutes, so wait and check again |
+| `mismatch` | It points somewhere else. Check that the value matches `cname_record` |
+| `error` | The lookup failed. Check again after a while |
+
+### 4. Issue on the server that receives the certificate
+
+All APIs and scripts used by the server that receives the certificate are under `{{.BaseURL}}/acme/*` (`/acme/update`, `/acme/verify`, `/acme/setup.sh`). The script is served by this server, **contains no secrets**, and takes its values at run time. One script does everything, from checking the acme.sh installation to issuing and installing the certificate.
+
+```sh
+curl -fsSL {{.BaseURL}}/acme/setup.sh -o setup.sh
+ACMEDNS_USERNAME=<username> ACMEDNS_PASSWORD=<password> \
+  ACME_EMAIL=<contact email> WEB_SERVER=nginx DOMAIN=a.com CERT_DIR=/etc/ssl/a.com bash setup.sh
+```
+
+The script runs in this order. If there is a problem, it reports the reason and stops before issuing.
+
+1. **Check credentials and allowed IP.** It checks them with `POST {{.BaseURL}}/acme/verify`. The `subdomain` in the response is used as acme.sh's `ACMEDNS_SUBDOMAIN`, so you do not enter it. If this server's IP is not in `allowfrom`, the script reports that IP. Add that IP to `allowfrom` (`PATCH /api/domains/<id>/acme`) and run the script again.
+2. **Check acme.sh.** It checks for version 3.1.4 or later and installs it if it is missing or older (`ACME_EMAIL` is required).
+3. **Select the web server and check its location.** It detects an installed `nginx`, `apache` or `caddy`, uses it as the default, and checks the executable and configuration directory (`WEB_SERVER`, `WEB_CONF_DIR`). **If no web server is detected or you want to reload it yourself, set `WEB_SERVER=manual` and pass a reload script or command in `RELOAD_CMD`** (e.g. `RELOAD_CMD=/usr/local/bin/reload-web.sh`). A script given as a path is checked to be executable.
+4. **Check the CNAME.** It checks through public DNS (`DNS_RESOLVER`, default `1.1.1.1`) that the `_acme-challenge.<domain>` CNAME of `DOMAIN` points to the `fulldomain` returned by `/acme/verify`. If it is missing or different, it prints the record to register and stops (when there is no terminal). Register the `cname_record` from step 3, wait for DNS propagation, and run the script again. To skip this check, set `SKIP_CNAME_CHECK=1`.
+5. **Issue and install.** It saves the certificate in `CERT_DIR` (default `/etc/ssl/<domain>`) and runs `RELOAD_CMD` on every renewal. Each web server has a default reload (Caddy also uses `CERT_GROUP`), and it is safe to run again even if a certificate already exists. If the storage directory can be created without sudo, sudo is not used.
+6. **Check the web server configuration.** It checks whether the configuration already uses this certificate; if not, it prints the configuration to add.
+7. **Check renewal.** If `RELOAD_CMD` uses `sudo` and this account needs a password for sudo, it warns. The automatic renewal (cron) cannot enter a password, so the reload would fail.
+
+- **Pass the domain without `*.`, as in `a.com`.** The wildcard (`*.a.com`) is always issued along with it, and passing `*.a.com` is treated as `a.com`. The wildcard covers only one level below (`x.a.com`).
+- **Account to run as:** On servers where reload needs sudo, run the script from a root shell (`sudo -i`, `su -`) (avoid `sudo bash setup.sh`). As root, the script removes sudo from the default reload command (this can be changed with `SUDO_CMD`), and acme.sh and its renewal cron are also registered for root. If you are not root, allow only the reload command without a password (NOPASSWD in sudoers), or use a `RELOAD_CMD` that works without sudo. **An agent cannot enter a sudo password.**
+- In an agent shell without a terminal, values **must be passed as environment variables**. Values given as environment variables are not asked for, and values that have defaults (`SSLCHK_URL`, `WEB_SERVER`, `CERT_DIR`, `RELOAD_CMD`, and `CERT_GROUP` for Caddy) can be omitted. When a human runs it in a terminal, it asks for each value, and the password is not shown on screen.
+- Do not put the password in logs, tickets or chats. Environment variables placed before a command can end up in the shell history, so when running interactively it is safer to enter values at the prompt.
+
+For a domain being connected for the first time, verifying **with staging first** avoids the production CA's issuance rate limits. Do this check before running the script.
+
+```sh
+ACMEDNS_BASE_URL={{.BaseURL}}/acme ACMEDNS_USERNAME=<username> ACMEDNS_PASSWORD=<password> ACMEDNS_SUBDOMAIN=<subdomain> \
+  ~/.acme.sh/acme.sh --issue --staging --dns dns_acmedns -d a.com -d '*.a.com'
+# if "Cert success." is printed, delete the staging certificate
+~/.acme.sh/acme.sh --remove -d a.com --ecc
+rm -rf ~/.acme.sh/a.com_ecc
+```
+
+Renewal is handled automatically by the cron job that acme.sh installed. After the first issuance, the credentials are saved in the acme.sh configuration, so the environment variables are not needed afterwards.
+
+### 5. Verify and register monitoring
+
+```sh
+curl -sS {{.BaseURL}}/api/domains/<id>
+```
+
+If `acme.last_update_at` is filled in and `acme.consecutive_failures` is 0, TXT updates are working.
+
+To keep checking this domain's certificate, add a monitoring target. The response contains the result of an immediate check.
+
+```sh
+curl -sS -X POST {{.BaseURL}}/api/domains/<id>/targets -H "$A" -H "$J" \
+  -d '{"hostname":"www.a.com","port":443,"ips":["203.0.113.10"]}'
+```
+
+- If `ips` is omitted, it connects once using the hostname (only one address is checked even if DNS returns several). To check that every server has the same certificate installed, list all server IPs in `ips` (up to 16).
+- To check again, call `curl -sS -X POST {{.BaseURL}}/api/targets/<target_id>/check -H "$A" -H "$J"`.
+- After that, the server checks all targets periodically.
+
+## Rotating keys, changing allowed IPs, disabling
+
+| Task | Call |
+| --- | --- |
+| Rotate key | `POST /api/domains/<id>/acme/rotate` (200, one-time credentials). The subdomain and CNAME stay the same, and the old key becomes invalid immediately |
+| Change allowed IPs | `PATCH /api/domains/<id>/acme` `{"allowfrom":["203.0.113.0/24"]}` |
+| Disable | `DELETE /api/domains/<id>/acme` (204). Deletes the challenge TXT. If ACME is enabled again, a new subdomain is created and the CNAME must be set up again |
+
+**After rotating the key, you must run the setup script again on the server with `FORCE=1`** (e.g. `FORCE=1 bash setup.sh`, passing the values as environment variables as above). When the new `password` is passed, `--issue --force` saves the new key in the acme.sh configuration. If you do not do this, the old key stays in the acme.sh configuration and the next automatic renewal fails with 401.
+
+## Status rules
+
+A domain's status is the worst of its targets' statuses and its ACME status. From worst to best: `critical` > `warning` > `info` > `ok` > `unknown`.
+
+| Code | Status | Meaning |
+| --- | --- | --- |
+{{- range .Codes}}
+| `{{.Code}}` | {{.Status}} | {{.Meaning}} |
+{{- end}}
+
+## Common errors and fixes
+
+- **`/acme/update` (the old `/update`) returns 401 `forbidden`:** The username or password is wrong, the old key is being used after a key rotation, or the calling server's IP is not in `allowfrom`. To find out which, call `POST {{.BaseURL}}/acme/verify` (with the same headers). If the IP is outside the allowed IPs, it returns 403 `ip_not_allowed` together with the calling server's `source_ip`. Accounts of domains where ACME has been disabled also get 401. If this server is behind a proxy, ask the admin to check the `TRUSTED_PROXIES` setting.
+- **`/acme/update` returns 400 `bad_txt`:** The TXT value is not 43 characters of `[A-Za-z0-9_-]`. This happens when it is called directly by a tool other than acme.sh.
+- **`/acme/update` returns 429 `rate_limited`:** The per-account call rate limit (first 10 calls, then 1 every 6 seconds). Try again after a while.
+- **`/acme/update` returns 429 `too_many_attempts`:** Too many authentication failures from this IP. Fix the credentials and wait a while.
+- **`/acme/update` returns 500 `dns_provider_error`:** This server could not call its DNS provider. Ask the server admin to check `{{.BaseURL}}/health`.
+- **`setup.sh` stops saying this server's IP is not in the allowed IP list:** Add the reported IP to `allowfrom` with `PATCH /api/domains/<id>/acme` and run the script again.
+- **`setup.sh` says the CNAME is missing or points somewhere else:** Register the `_acme-challenge.<domain>` CNAME it prints, wait for DNS propagation, and run the script again. For a domain that only uses internal DNS, set `SKIP_CNAME_CHECK=1`.
+- **`setup.sh` says it cannot find the executable of the web server:** Pass the correct `WEB_SERVER`, or, if you reload it yourself, run with `WEB_SERVER=manual RELOAD_CMD=<reload script>`. To skip only this check, set `SKIP_WEB_CHECK=1`.
+- **`setup.sh` warns that the reload command uses sudo (and sudo needs a password):** The certificate was issued, but reload will fail during automatic renewal. Reinstall as root as described in "Account to run as" above, or configure NOPASSWD.
+- **`setup.sh` says a value is required and tells you to run it in a terminal or pass it as an environment variable:** It could not ask for the value because there is no terminal. Pass that environment variable.
+- **Shell errors from `setup.sh` (`unbound variable` etc.):** It may be an old `setup.sh`. Download it again and run it.
+- **Let's Encrypt validation fails:** First check with `acme/check` that `cname_status` is `ok`. If the domain has a CAA record, it must allow `letsencrypt.org`.
+- **`CNAME_MISMATCH`:** Disabling and re-enabling ACME changes the subdomain. Fix the CNAME to the value of the new `cname_record`.
+- **acme.sh prints "Skipping. Next renewal time is":** It skipped because a certificate has already been issued. If the new key needs to be saved, add `--force`.
+
+## Monitoring API
+
+Reads do not need a key.
+
+- `GET {{.BaseURL}}/api/summary`: number of domains per status
+- `GET {{.BaseURL}}/api/domains?status=critical`: list of domains (optional status filter)
+- `GET {{.BaseURL}}/api/domains/<id>`: check results per target and connection address, and ACME status
+- `GET {{.BaseURL}}/api/targets/<target_id>/results?limit=50`: check history
+- `GET {{.BaseURL}}/api/codes`: the status code table above (JSON)
+
+Admin only: `PATCH /api/domains/<id>` (notes), `DELETE /api/domains/<id>` (deletes the domain; if ACME is enabled, it is disabled first and the TXT is deleted), `PATCH` and `DELETE /api/targets/<target_id>`, `GET /api/audit` (audit log).
+
+## Do not
+
+- Do not put `ADMIN_KEY` or the ACME `password` in logs, tickets, chats or repositories.
+- Do not repeat issuance tests against the production CA. Verify with `--staging` first.
+- Do not change the domain's DNS except for the one `_acme-challenge` CNAME record.
+- Do not leave `allowfrom` empty.
+- Do not leave a reload command that uses `sudo` requiring a password (reload fails during automatic renewal, and the old certificate keeps being used).

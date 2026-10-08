@@ -1,23 +1,18 @@
 import type { CnameStatus, Status } from "../api/types.ts";
+import { t } from "../i18n/index.ts";
 
-export const STATUS_LABEL: Record<Status, string> = {
-  critical: "긴급",
-  warning: "경고",
-  info: "정보",
-  ok: "정상",
-  unknown: "미점검",
-};
+/** 상태의 화면 이름(현재 언어). */
+export function statusLabel(s: Status): string {
+  return t(`status.${s}`);
+}
 
 /** 나쁜 순서. 요약 카드와 필터가 이 순서로 나온다. */
 export const STATUS_ORDER: readonly Status[] = ["critical", "warning", "info", "ok", "unknown"];
 
-export const CNAME_LABEL: Record<CnameStatus, string> = {
-  ok: "CNAME 정상",
-  missing: "CNAME 없음",
-  mismatch: "CNAME 다름",
-  error: "CNAME 확인 실패",
-  unknown: "CNAME 미확인",
-};
+/** CNAME 확인 상태의 화면 이름(현재 언어). */
+export function cnameLabel(s: CnameStatus): string {
+  return t(`cname.${s}`);
+}
 
 /** 주소창의 ?status= 값을 상태로 바꾼다. 모르는 값이면 null(필터 없음). */
 export function parseStatus(v: string | null): Status | null {

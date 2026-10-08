@@ -4,6 +4,7 @@ import type { Target } from "../api/types.ts";
 import { useAction } from "../app/useAction.ts";
 import { Dialog } from "../components/Dialog.tsx";
 import { Notice } from "../components/Notice.tsx";
+import { t } from "../i18n/index.ts";
 import { parsePort, splitList } from "../lib/input.ts";
 
 interface Props {
@@ -27,7 +28,7 @@ export function TargetDialog({ domainId, target, onClose, onSaved }: Props) {
     e.preventDefault();
     const p = parsePort(port);
     if (p === null) {
-      setLocalError("포트는 1~65535 사이의 정수여야 합니다.");
+      setLocalError(t("targetDialog.portError"));
       return;
     }
     setLocalError(null);
@@ -44,37 +45,37 @@ export function TargetDialog({ domainId, target, onClose, onSaved }: Props) {
   }
 
   return (
-    <Dialog title={target ? "대상 수정" : "모니터링 대상 추가"} onClose={onClose}>
+    <Dialog title={target ? t("targetDialog.editTitle") : t("targetDialog.addTitle")} onClose={onClose}>
       <form onSubmit={(e) => void submit(e)}>
         <label className="field">
-          <span>호스트명</span>
+          <span>{t("targetDialog.hostname")}</span>
           <input value={hostname} onChange={(e) => setHostname(e.target.value)} placeholder="www.a.com" autoFocus required />
         </label>
         <label className="field">
-          <span>포트</span>
+          <span>{t("targetDialog.port")}</span>
           <input value={port} onChange={(e) => setPort(e.target.value)} inputMode="numeric" required />
         </label>
         <label className="field">
-          <span>SNI (선택)</span>
-          <input value={sni} onChange={(e) => setSni(e.target.value)} placeholder="비우면 호스트명" />
+          <span>{t("targetDialog.sni")}</span>
+          <input value={sni} onChange={(e) => setSni(e.target.value)} placeholder={t("targetDialog.sniPlaceholder")} />
         </label>
         <label className="field">
-          <span>서버 IP (선택, 한 줄에 하나)</span>
+          <span>{t("targetDialog.ips")}</span>
           <textarea value={ips} onChange={(e) => setIps(e.target.value)} rows={3} placeholder={"10.0.1.10\n10.0.1.11"} />
           <small>
-            비우면 호스트명으로 한 번만 접속합니다(DNS가 여러 주소를 줘도 하나만 점검). 서버마다 같은 인증서가 깔렸는지 보려면 IP를 모두 적습니다(최대 16개).
+            {t("targetDialog.ipsHint")}
           </small>
         </label>
         <label className="field">
-          <span>메모 (선택)</span>
+          <span>{t("common.memoOptional")}</span>
           <input value={memo} onChange={(e) => setMemo(e.target.value)} maxLength={500} />
         </label>
-        <p className="muted small-text">저장하면 바로 한 번 점검합니다. 접속 설정을 바꾸면 옛 주소의 결과는 더 이상 보이지 않습니다.</p>
+        <p className="muted small-text">{t("targetDialog.saveNote")}</p>
         {(localError ?? error) && <Notice kind="error">{localError ?? error}</Notice>}
         <div className="actions">
-          <button type="button" className="btn" onClick={onClose}>취소</button>
+          <button type="button" className="btn" onClick={onClose}>{t("common.cancel")}</button>
           <button type="submit" className="btn primary" disabled={busy || hostname.trim() === ""}>
-            {busy ? "점검 중…" : "저장"}
+            {busy ? t("common.checking") : t("common.save")}
           </button>
         </div>
       </form>

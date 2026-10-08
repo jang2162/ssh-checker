@@ -7,12 +7,13 @@ import { useAction } from "../app/useAction.ts";
 import { usePageTitle } from "../app/usePageTitle.ts";
 import { useResource } from "../app/useResource.ts";
 import { Notice } from "../components/Notice.tsx";
+import { T, t } from "../i18n/index.ts";
 import { formatDateTime } from "../lib/format.ts";
 
 const PAGE = 100;
 
 export function Audit() {
-  usePageTitle("감사 로그");
+  usePageTitle(t("nav.audit"));
   const { admin, ready } = useApp();
   const { data, error, loading } = useResource(() => (admin ? api.audit(undefined, PAGE) : Promise.resolve([])), [admin]);
   const [older, setOlder] = useState<AuditEntry[]>([]);
@@ -25,8 +26,8 @@ export function Audit() {
     setExhausted(false);
   }, [data]);
 
-  if (!ready) return <p className="muted">불러오는 중…</p>;
-  if (!admin) return <Notice kind="info">감사 로그는 관리자만 볼 수 있습니다. <Link to="/admin">관리자 로그인</Link></Notice>;
+  if (!ready) return <p className="muted">{t("common.loading")}</p>;
+  if (!admin) return <Notice kind="info"><T k="audit.adminOnly" vars={{ link: <Link to="/admin">{t("login.title")}</Link> }} /></Notice>;
 
   const entries = [...(data ?? []), ...older];
   const last = entries[entries.length - 1];
@@ -42,22 +43,22 @@ export function Audit() {
   return (
     <>
       <div className="page-head">
-        <h1>감사 로그</h1>
+        <h1>{t("nav.audit")}</h1>
       </div>
       {error && <Notice kind="error">{error}</Notice>}
-      {loading && !data && <p className="muted">불러오는 중…</p>}
-      {data && entries.length === 0 && <div className="empty"><p>기록이 없습니다.</p></div>}
+      {loading && !data && <p className="muted">{t("common.loading")}</p>}
+      {data && entries.length === 0 && <div className="empty"><p>{t("audit.empty")}</p></div>}
       {entries.length > 0 && (
         <div className="table-wrap">
           <table className="table">
             <thead>
               <tr>
-                <th>시각</th>
-                <th>동작</th>
-                <th>대상</th>
-                <th>사용자</th>
+                <th>{t("audit.colTime")}</th>
+                <th>{t("audit.colAction")}</th>
+                <th>{t("audit.colTarget")}</th>
+                <th>{t("audit.colActor")}</th>
                 <th>IP</th>
-                <th>상세</th>
+                <th>{t("audit.colDetail")}</th>
               </tr>
             </thead>
             <tbody>
@@ -78,7 +79,7 @@ export function Audit() {
       {more.error && <Notice kind="error">{more.error}</Notice>}
       {entries.length >= PAGE && !exhausted && (
         <div className="actions center">
-          <button type="button" className="btn" disabled={more.busy} onClick={() => void loadMore()}>더 보기</button>
+          <button type="button" className="btn" disabled={more.busy} onClick={() => void loadMore()}>{t("audit.more")}</button>
         </div>
       )}
     </>

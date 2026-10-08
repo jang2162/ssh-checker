@@ -1,50 +1,51 @@
-# Komodo Stack 정의 (저장소 모드, Caddy 뒤에서 실행).
-# Komodo가 이 저장소를 clone해 deploy/에서 compose로 배포한다. 이미지는 compose가 저장소의 Dockerfile로 직접 빌드한다.
-# api는 호스트 포트를 열지 않고, Caddy 컨테이너가 붙어 있는 Docker 네트워크에만 연결된다.
+# Komodo Stack definition (repo mode, running behind Caddy).
+# Komodo clones this repository and deploys with compose from deploy/. compose builds the image from the repository Dockerfile.
+# The api publishes no host port; it only joins the Docker network the Caddy container is on.
 #
-# 쓰는 방법 (docs/guide/installation.md의 「Komodo로 배포」 참고):
-#   - UI로 만들 때: 아래 값을 Stack 설정 화면에 그대로 옮긴다.
-#   - Resource Sync로 만들 때: 이 파일을 resource_path로 지정한다.
-# 아래 <...>와 server 값은 환경에 맞게 바꾼다.
+# How to use (see "Deploying with Komodo" in docs/guide/installation.md):
+#   - Creating it in the UI: copy the values below into the Stack settings screen.
+#   - Creating it with Resource Sync: point resource_path at this file.
+# Replace the <...> values and the server value to match your environment.
 #
-# Caddy 없이 호스트 포트로 열려면 file_paths의 compose.caddy.yaml을 compose.ports.yaml로 바꾸고,
-# environment의 CADDY_NETWORK 대신 BIND_ADDR(필수)와 API_PORT를 넣는다.
+# To publish a host port instead of using Caddy, change compose.caddy.yaml in file_paths to compose.ports.yaml,
+# and put BIND_ADDR (required) and API_PORT in environment instead of CADDY_NETWORK.
 
 [[stack]]
 name = "ssl-checker"
-description = "인증서 모니터링 + DNS-01 검증 대행 (acme-dns 호환 API)"
+description = "Certificate monitoring + DNS-01 challenge delegation (acme-dns compatible API)"
 [stack.config]
-server = "<배포할 Komodo Server 이름>"
+server = "<Komodo Server to deploy to>"
 
-# 저장소: Komodo가 매 배포마다 이 브랜치를 clone/pull 한다. (UI: Choose Mode = Git Repo)
-# git_provider는 저장소를 둔 Git 서버 도메인(GitHub이면 github.com), repo는 <조직>/<저장소>.
+# Repository: Komodo clones/pulls this branch on every deploy. (UI: Choose Mode = Git Repo)
+# git_provider is the domain of the Git server that hosts the repository (github.com for GitHub); repo is <owner>/<repository>.
 git_provider = "git.example.com"
-repo = "<조직>/<저장소>"
+repo = "<owner>/<repository>"
 branch = "main"
-# 비공개 저장소면 Komodo에 등록한 Git 계정 이름을 넣는다.
-git_account = "<Komodo Git 계정>"
+# For a private repository, the name of the Git account registered in Komodo.
+git_account = "<Komodo Git account>"
 
-# 저장소 안에서 compose를 실행할 디렉터리와 파일. (UI: Files → Run Directory, File Paths)
+# Directory and files inside the repository to run compose with. (UI: Files -> Run Directory, File Paths)
 run_directory = "deploy"
 file_paths = ["compose.yaml", "compose.caddy.yaml"]
 
-# 배포 전에 docker compose build를 실행한다. UI 이름은 Build Images → "Pre Build Images".
-# 꺼도 compose.yaml의 pull_policy: build 때문에 Deploy할 때 빌드된다.
+# Run docker compose build before deploying. UI name: Build Images -> "Pre Build Images".
+# Even when off, pull_policy: build in compose.yaml builds the image on Deploy.
 run_build = true
 
-# migrate는 마이그레이션 후 정상 종료하는 서비스라 상태 점검에서 뺀다.
+# migrate exits normally after migrating, so leave it out of the health check.
 ignore_services = ["migrate"]
 
-# Komodo가 run_directory에 .env로 써서 --env-file로 넘긴다.
-# 비밀값은 [[이름]] 보간으로만 넣고, 실제 값은 Komodo Variables(시크릿)나 Periphery [secrets]에 둔다.
-# 변수 설명: docs/guide/configuration.md
+# Komodo writes this to .env in run_directory and passes it with --env-file.
+# Inject secrets only with [[NAME]] interpolation; keep the real values in Komodo Variables (secrets) or Periphery [secrets].
+# Variable reference: docs/guide/configuration.md
 environment = """
-CADDY_NETWORK=<Caddy 컨테이너가 붙어 있는 Docker 네트워크 이름>
-TRUSTED_PROXIES=<Caddy 컨테이너 IP>
-PUBLIC_URL=<클라이언트가 api에 닿는 외부 주소, 예: https://ssl-checker.example.com>
+CADDY_NETWORK=<name of the Docker network the Caddy container is on>
+TRUSTED_PROXIES=<Caddy container IP>
+PUBLIC_URL=<external address clients use to reach the api, e.g. https://ssl-checker.example.com>
+UI_LANGUAGE=en
 DNS_PROVIDER=cloudflare
 CHALLENGE_ZONE=acme.example.com
-CF_ZONE_ID=<챌린지 TXT를 둘 Cloudflare 존의 Zone ID>
+CF_ZONE_ID=<Zone ID of the Cloudflare zone that holds the challenge TXT records>
 ADMIN_KEY=[[SSLCHK_ADMIN_KEY]]
 CF_API_TOKEN=[[SSLCHK_CF_API_TOKEN]]
 POSTGRES_PASSWORD=[[SSLCHK_POSTGRES_PASSWORD]]

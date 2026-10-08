@@ -1,10 +1,10 @@
 import type { Status } from "../api/types.ts";
 import { useApp } from "../app/context.tsx";
-import { STATUS_LABEL } from "../lib/status.ts";
+import { statusLabel } from "../lib/status.ts";
 
 /** 색만으로 구분하지 않도록 글자를 함께 쓴다. */
 export function StatusBadge({ status }: { status: Status }) {
-  return <span className={`badge badge-${status}`}>{STATUS_LABEL[status]}</span>;
+  return <span className={`badge badge-${status}`}>{statusLabel(status)}</span>;
 }
 
 /** 판정 코드 태그. 마우스를 올리면 서버가 알려 준 설명이 보인다. */

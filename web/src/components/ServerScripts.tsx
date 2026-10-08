@@ -1,5 +1,6 @@
 import { useId, useState, type ReactNode } from "react";
 import type { ServerSetup, SetupScript } from "../api/types.ts";
+import { t } from "../i18n/index.ts";
 import { withForce } from "../lib/command.ts";
 import { CopyButton } from "./CopyButton.tsx";
 import { ScriptBlock } from "./ScriptBlock.tsx";
@@ -26,9 +27,9 @@ export function ServerScripts({ setup, servers, force = false, children }: Props
       {children}
       {current && (
         <>
-          <h3>웹서버 설정 예</h3>
-          <p className="muted small-text">스크립트가 설정 반영 여부를 확인하고, 아직이면 이 설정을 출력합니다.</p>
-          <div className="tabs" role="tablist" aria-label="웹서버">
+          <h3>{t("servers.heading")}</h3>
+          <p className="muted small-text">{t("servers.hint")}</p>
+          <div className="tabs" role="tablist" aria-label={t("servers.tabs")}>
             {servers.map((s) => (
               <button
                 key={s.id}
@@ -45,7 +46,7 @@ export function ServerScripts({ setup, servers, force = false, children }: Props
           </div>
           <div id={panelId} role="tabpanel">
             <pre className="code">{current.config}</pre>
-            <CopyButton text={current.config} label="설정 복사" />
+            <CopyButton text={current.config} label={t("copy.config")} />
           </div>
         </>
       )}

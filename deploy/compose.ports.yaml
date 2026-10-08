@@ -1,8 +1,8 @@
-# api를 호스트 포트로 여는 파일. 앞단 리버스 프록시 없이 서버들이 직접 api에 붙을 때 compose.yaml에 덧붙인다.
+# Publishes the api on a host port. Add it to compose.yaml when servers reach the api directly (no front reverse proxy).
 #   docker compose -f compose.yaml -f compose.ports.yaml --env-file .env up -d
 #
-# BIND_ADDR는 필수다. 비어 있으면 모든 인터페이스에 열리므로 :?로 막는다.
-# 인증서를 받을 서버들만 닿는 내부 인터페이스 주소를 넣는다.
+# BIND_ADDR is required. An empty value would bind every interface, so :? rejects it.
+# Use the address of an internal interface that only the servers receiving certificates can reach.
 services:
   api:
     ports:

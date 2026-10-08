@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"ssl-checker/internal/lang"
 	"ssl-checker/internal/netutil"
 )
 
@@ -44,6 +45,8 @@ type Config struct {
 	CheckInterval  time.Duration
 	PublicURL      string
 	DNSResolver    string
+	// Language는 화면, 스크립트, llms.txt의 언어다(UI_LANGUAGE, 기본 en).
+	Language lang.Lang
 }
 
 // Load는 role에 필요한 변수를 읽는다. 문제가 여러 개면 한 번에 모두 돌려준다.
@@ -115,6 +118,11 @@ func Load(role Role, getenv func(string) string) (Config, error) {
 			errs = append(errs, fmt.Errorf("PUBLIC_URL: %w", err))
 		}
 		c.PublicURL = publicURL
+		language, err := lang.Parse(getenv("UI_LANGUAGE"))
+		if err != nil {
+			errs = append(errs, err)
+		}
+		c.Language = language
 	}
 	return c, errors.Join(errs...)
 }

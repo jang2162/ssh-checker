@@ -1,23 +1,24 @@
 import { Fragment } from "react";
 import type { CheckResult } from "../api/types.ts";
+import { t } from "../i18n/index.ts";
 import { daysLeftText, daysUntil, formatDate, formatDateTime, relativeTime, shortSerial } from "../lib/format.ts";
 import { ReasonTags, StatusBadge } from "./StatusBadge.tsx";
 
 /** 대상의 접속 주소별 최신 점검 결과. */
 export function ResultsTable({ results, now }: { results: readonly CheckResult[]; now: number }) {
-  if (results.length === 0) return <p className="muted">아직 점검 결과가 없습니다.</p>;
+  if (results.length === 0) return <p className="muted">{t("results.empty")}</p>;
   return (
     <div className="table-wrap">
       <table className="table">
         <thead>
           <tr>
-            <th>상태</th>
-            <th>접속 주소</th>
-            <th>만료일</th>
-            <th>발급자</th>
+            <th>{t("col.status")}</th>
+            <th>{t("col.address")}</th>
+            <th>{t("col.expires")}</th>
+            <th>{t("col.issuer")}</th>
             <th>serial</th>
             <th>TLS</th>
-            <th>점검</th>
+            <th>{t("col.checked")}</th>
           </tr>
         </thead>
         <tbody>
@@ -53,18 +54,18 @@ export function ResultsTable({ results, now }: { results: readonly CheckResult[]
 
 /** 대상의 점검 이력(최신순). */
 export function HistoryTable({ results }: { results: readonly CheckResult[] }) {
-  if (results.length === 0) return <p className="muted">이력이 없습니다.</p>;
+  if (results.length === 0) return <p className="muted">{t("history.empty")}</p>;
   return (
     <div className="table-wrap">
       <table className="table">
         <thead>
           <tr>
-            <th>점검 시각</th>
-            <th>접속 주소</th>
-            <th>상태</th>
-            <th>만료일</th>
+            <th>{t("col.checkedAt")}</th>
+            <th>{t("col.address")}</th>
+            <th>{t("col.status")}</th>
+            <th>{t("col.expires")}</th>
             <th>serial</th>
-            <th>사유·오류</th>
+            <th>{t("col.reasons")}</th>
           </tr>
         </thead>
         <tbody>

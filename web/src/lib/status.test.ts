@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Status } from "../api/types.ts";
-import { isStale, latestCheckedAt, parseGoDuration, parseStatus, sortByUrgency, STATUS_LABEL, STATUS_ORDER } from "./status.ts";
+import { setLanguage } from "../i18n/index.ts";
+import { cnameLabel, isStale, latestCheckedAt, parseGoDuration, parseStatus, sortByUrgency, statusLabel, STATUS_ORDER } from "./status.ts";
 
 test("parseGoDuration reads Go duration strings", () => {
   assert.equal(parseGoDuration("6h0m0s"), 6 * 3600_000);
@@ -24,7 +25,18 @@ test("parseStatus accepts only known statuses", () => {
 
 test("every status has a label and order is worst first", () => {
   assert.deepEqual([...STATUS_ORDER], ["critical", "warning", "info", "ok", "unknown"]);
-  for (const s of STATUS_ORDER) assert.ok(STATUS_LABEL[s].length > 0);
+  for (const s of STATUS_ORDER) assert.ok(statusLabel(s).length > 0);
+});
+
+test("status and CNAME labels follow the language", () => {
+  setLanguage("ko");
+  assert.equal(statusLabel("critical"), "긴급");
+  assert.equal(statusLabel("unknown"), "미점검");
+  assert.equal(cnameLabel("mismatch"), "CNAME 다름");
+  setLanguage("en");
+  assert.equal(statusLabel("critical"), "Critical");
+  assert.equal(statusLabel("unknown"), "Not checked");
+  assert.equal(cnameLabel("mismatch"), "CNAME mismatch");
 });
 
 test("isStale flags results older than twice the interval", () => {

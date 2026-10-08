@@ -3,6 +3,7 @@ package app
 import (
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -10,13 +11,16 @@ import (
 	"ssl-checker/internal/config"
 	"ssl-checker/internal/db/dbtest"
 	"ssl-checker/internal/dnsprovider/memory"
+	"ssl-checker/internal/lang"
 )
 
-func serveHandler(t *testing.T) http.Handler {
+func serveHandler(t *testing.T) http.Handler { return serveHandlerLang(t, lang.Default) }
+
+func serveHandlerLang(t *testing.T, l lang.Lang) http.Handler {
 	t.Helper()
 	cfg := config.Config{
 		DNSProvider: "memory", ChallengeZone: "acme.test", TXTTTL: 60, AdminKey: strings.Repeat("k", 32),
-		CheckInterval: time.Hour, DNSResolver: "127.0.0.1:1",
+		CheckInterval: time.Hour, DNSResolver: "127.0.0.1:1", Language: l,
 	}
 	return newServeHandler(cfg, dbtest.New(t), memory.New())
 }
@@ -58,13 +62,20 @@ func TestServeHandlerKeepsAPIPathsAheadOfTheUI(t *testing.T) {
 	}
 }
 
+// llms.txt follows UI_LANGUAGE: English by default, Korean when set.
 func TestServeHandlerServesLLMSTxt(t *testing.T) {
-	rec := get(serveHandler(t), "GET", "/llms.txt")
-	if rec.Code != 200 || !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/plain") {
-		t.Fatalf("GET /llms.txt = %d %q", rec.Code, rec.Header().Get("Content-Type"))
-	}
-	if body := rec.Body.String(); !strings.Contains(body, "챌린지 존: acme.test") || !strings.Contains(body, "http://example.com/api/domains") {
-		t.Fatalf("body = %q", body[:300])
+	for l, zoneLine := range map[lang.Lang]string{lang.EN: "Challenge zone: acme.test", lang.KO: "챌린지 존: acme.test"} {
+		rec := get(serveHandlerLang(t, l), "GET", "/llms.txt")
+		if rec.Code != 200 || !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/plain") {
+			t.Fatalf("%s: GET /llms.txt = %d %q", l, rec.Code, rec.Header().Get("Content-Type"))
+		}
+		body := rec.Body.String()
+		if !strings.Contains(body, zoneLine) || !strings.Contains(body, "http://example.com/api/domains") {
+			t.Fatalf("%s: body = %.300q", l, body)
+		}
+		if l == lang.EN && regexp.MustCompile("[가-힣]").MatchString(body) {
+			t.Fatalf("the English llms.txt contains Korean text")
+		}
 	}
 }
 

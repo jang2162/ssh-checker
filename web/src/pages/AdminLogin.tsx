@@ -4,6 +4,7 @@ import { ApiError } from "../api/client.ts";
 import { useApp } from "../app/context.tsx";
 import { usePageTitle } from "../app/usePageTitle.ts";
 import { Notice } from "../components/Notice.tsx";
+import { t } from "../i18n/index.ts";
 import { errorMessage } from "../lib/errors.ts";
 
 /**
@@ -11,13 +12,13 @@ import { errorMessage } from "../lib/errors.ts";
  * 로그인하면(또는 이미 로그인돼 있으면) 대시보드로 보낸다.
  */
 export function AdminLogin() {
-  usePageTitle("관리자 로그인");
+  usePageTitle(t("login.title"));
   const { ready, admin, login } = useApp();
   const [key, setKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  if (!ready) return <p className="muted">불러오는 중…</p>;
+  if (!ready) return <p className="muted">{t("common.loading")}</p>;
   if (admin) return <Navigate to="/" replace />;
 
   async function submit(e: FormEvent) {
@@ -28,23 +29,23 @@ export function AdminLogin() {
       await login(key);
     } catch (err) {
       // 로그인 화면의 401은 "세션 만료"가 아니라 "키가 틀림"이다.
-      setError(err instanceof ApiError && err.status === 401 ? "관리자 키가 맞지 않습니다." : errorMessage(err));
+      setError(err instanceof ApiError && err.status === 401 ? t("login.wrongKey") : errorMessage(err));
       setBusy(false);
     }
   }
 
   return (
     <section className="card login-card">
-      <h1>관리자 로그인</h1>
+      <h1>{t("login.title")}</h1>
       <form onSubmit={(e) => void submit(e)}>
         <label className="field">
-          <span>관리자 키 (ADMIN_KEY)</span>
+          <span>{t("login.keyLabel")}</span>
           <input type="password" value={key} onChange={(e) => setKey(e.target.value)} autoComplete="off" autoFocus required />
         </label>
-        <p className="muted small-text">로그인하면 12시간 동안 유지됩니다. 공용 PC에서는 사용 뒤 로그아웃하세요.</p>
+        <p className="muted small-text">{t("login.hint")}</p>
         {error && <Notice kind="error">{error}</Notice>}
         <div className="actions">
-          <button type="submit" className="btn primary" disabled={busy || key === ""}>로그인</button>
+          <button type="submit" className="btn primary" disabled={busy || key === ""}>{t("login.submit")}</button>
         </div>
       </form>
     </section>

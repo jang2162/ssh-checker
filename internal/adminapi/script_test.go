@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"testing"
 
+	"ssl-checker/internal/lang"
 	"ssl-checker/internal/llmstxt"
 )
 
@@ -30,7 +31,7 @@ func bashPath(t *testing.T) string {
 }
 
 func allScripts() map[string]string {
-	return map[string]string{"setup": setupScript("https://ssl.example.com")}
+	return map[string]string{"setup": setupScript("https://ssl.example.com", lang.KO)}
 }
 
 // 생성한 스크립트가 셸 문법에 맞고, 자격 증명 값을 담고 있지 않다.
@@ -575,7 +576,7 @@ func TestSetupScriptSudoDefaultFollowsAccount(t *testing.T) {
 
 // 스크립트가 읽는 환경변수는 문서와 llms.txt에 모두 있어야 한다. 변수를 추가하고 문서를 빼먹는 일을 막는다.
 func TestSetupVariablesAreDocumented(t *testing.T) {
-	script := setupScript("https://ssl.example.com")
+	script := setupScript("https://ssl.example.com", lang.KO)
 	vars := map[string]bool{}
 	for _, re := range []*regexp.Regexp{
 		regexp.MustCompile(`(?m)^\s*ask ([A-Z][A-Z_]+)`),      // 물어보는 값
@@ -600,7 +601,7 @@ func TestSetupVariablesAreDocumented(t *testing.T) {
 		}
 		return string(b)
 	}
-	llms, err := llmstxt.Render(llmstxt.Data{BaseURL: "https://ssl.example.com", Zone: "acme.example.com"})
+	llms, err := llmstxt.Render(llmstxt.Data{BaseURL: "https://ssl.example.com", Zone: "acme.example.com", Lang: lang.KO})
 	if err != nil {
 		t.Fatal(err)
 	}

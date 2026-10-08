@@ -1,4 +1,5 @@
 import type { SetupScript } from "../api/types.ts";
+import { t } from "../i18n/index.ts";
 import { CopyButton } from "./CopyButton.tsx";
 
 /**
@@ -9,11 +10,11 @@ export function ScriptBlock({ script, cmd = script.cmd }: { script: SetupScript;
   return (
     <>
       <pre className="code">{cmd}</pre>
-      <CopyButton text={cmd} label="명령 복사" />
+      <CopyButton text={cmd} label={t("copy.command")} />
       <details className="script-view">
-        <summary>스크립트 내용 보기</summary>
+        <summary>{t("script.view")}</summary>
         <pre className="code">{script.script}</pre>
-        <CopyButton text={script.script} label="스크립트 복사" />
+        <CopyButton text={script.script} label={t("copy.script")} />
       </details>
     </>
   );

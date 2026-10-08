@@ -1,30 +1,32 @@
-# 운영
+# Operations
 
-아래 명령은 [설치](installation.md)대로 `deploy/.env`와 프로젝트 이름 `ssl-checker`로 띄웠다고 가정합니다. 편의를 위해 별칭을 둡니다. 호스트 포트로 열었다면 `compose.caddy.yaml`을 `compose.ports.yaml`로 바꿉니다. Komodo로 배포했다면 Komodo UI에서 같은 작업을 하거나, 서버의 Stack 디렉터리에서 실행합니다.
+**English** | [한국어](operations.ko.md)
+
+The commands below assume you started the stack as described in [Installation](installation.md), with `deploy/.env` and the project name `ssl-checker`. For convenience, define these aliases. If you exposed the api on a host port, replace `compose.caddy.yaml` with `compose.ports.yaml`. If you deployed with Komodo, do the same work in the Komodo UI, or run the commands in the Stack directory on the server.
 
 ```bash
 alias dc='docker compose -p ssl-checker -f deploy/compose.yaml -f deploy/compose.caddy.yaml --env-file deploy/.env'
 alias psql-sslchk='dc exec db psql -U sslchk -d sslchk'
 ```
 
-## 업데이트
+## Updating
 
 ```bash
 git pull
 dc up -d --build
 ```
 
-compose가 새 소스로 이미지를 다시 빌드합니다. `migrate`가 먼저 새 마이그레이션을 적용하고, 성공해야 api와 worker가 새 버전으로 시작합니다. api와 worker가 분리돼 있어, api를 재시작하는 동안에도 이미 발급된 인증서에는 영향이 없습니다. 갱신 중이던 서버는 acme.sh가 다음 cron 실행 때 재시도합니다.
+compose rebuilds the image from the new source. `migrate` applies new migrations first, and api and worker start on the new version only if it succeeds. Because api and worker are separate, certificates that have already been issued are not affected while the api restarts. A server that was in the middle of a renewal is retried by acme.sh on its next cron run.
 
-## 백업과 복원
+## Backup and restore
 
-DB에는 도메인, 계정(키 해시), TXT 값, 감사 로그가 있습니다. 하루 한 번 백업해 다른 저장소에 보관합니다.
+The DB holds the domains, accounts (key hashes), TXT values and the audit log. Back it up once a day and keep the backup in a different storage location.
 
 ```bash
 dc exec -T db pg_dump -U sslchk -d sslchk --format=custom > sslchk-$(date +%F).dump
 ```
 
-복원:
+Restore:
 
 ```bash
 dc stop api worker
@@ -32,131 +34,131 @@ dc exec -T db pg_restore -U sslchk -d sslchk --clean --if-exists < sslchk-2026-1
 dc start api worker
 ```
 
-DB를 잃으면 모든 계정이 사라집니다. 그러면 도메인마다 재등록하고 CNAME과 서버 자격 증명을 다시 설정해야 합니다.
+If you lose the DB, every account is gone. You then have to re-register each domain and set up the CNAME and the server credentials again.
 
-## 비밀값 교체
+## Rotating secrets
 
-| 대상 | 절차 |
+| Secret | Procedure |
 | --- | --- |
-| `ADMIN_KEY` | `deploy/.env` 값 변경 → `dc up -d api` |
-| `CF_API_TOKEN` | Cloudflare에서 새 토큰 발급 → `deploy/.env` 값 변경 → `dc up -d api worker` → `/health`가 `provider: ok`인지 확인 → 옛 토큰 삭제 |
-| 계정 키 | 아래 [계정 폐기와 키 재발급](#계정-폐기와-키-재발급) |
+| `ADMIN_KEY` | Change the value in `deploy/.env` → `dc up -d api` |
+| `CF_API_TOKEN` | Create a new token in Cloudflare → change the value in `deploy/.env` → `dc up -d api worker` → confirm that `/health` shows `provider: ok` → delete the old token |
+| Account keys | See [Revoking accounts and rotating keys](#revoking-accounts-and-rotating-keys) below |
 
-### ADMIN_KEY가 새었을 때
+### When ADMIN_KEY leaks
 
-`ADMIN_KEY`로는 `allowfrom`을 비우고 키를 재발급해 CNAME이 이미 걸린 모든 도메인의 쓸 수 있는 키를 얻을 수 있습니다. 값을 바꿔도 공격자가 이미 얻은 키는 무효가 되지 않으므로 다음 순서로 정리합니다.
+With `ADMIN_KEY`, anyone can clear `allowfrom` and rotate keys, which gives them a working key for every domain whose CNAME is already in place. Changing the value does not invalidate keys the attacker has already obtained, so clean up in this order:
 
-1. `deploy/.env`의 `ADMIN_KEY`를 새 값으로 바꾸고 `dc up -d api`로 재배포합니다. 모든 로그인 세션도 끝납니다.
-2. `GET <앱>/api/audit`에서 내가 하지 않은 `acme_rotate`, `acme_update`, `acme_enable`, `login` 기록이 있는지 봅니다.
-3. 영향받은 도메인은 [키를 재발급](#계정-폐기와-키-재발급)하고, `allowfrom`을 원래대로 되돌립니다(`PATCH <앱>/api/domains/<id>/acme`).
+1. Set `ADMIN_KEY` in `deploy/.env` to a new value and redeploy with `dc up -d api`. This also ends every login session.
+2. Check `GET <app>/api/audit` for `acme_rotate`, `acme_update`, `acme_enable` or `login` entries that you did not make.
+3. For affected domains, [rotate the key](#revoking-accounts-and-rotating-keys) and restore `allowfrom` to its original value (`PATCH <app>/api/domains/<id>/acme`).
 
-## 계정 폐기와 키 재발급
+## Revoking accounts and rotating keys
 
-키가 새었거나 잃어버렸으면 **재발급**합니다. username과 서브도메인이 그대로라 CNAME은 다시 걸지 않아도 됩니다. 옛 키는 바로 무효가 됩니다.
-
-```bash
-curl -s -X POST <앱>/api/domains/<id>/acme/rotate -H "Authorization: Bearer $ADMIN_KEY" -H 'Content-Type: application/json'
-```
-
-응답의 새 `password`로 각 서버의 acme.sh 설정을 바꿉니다: 서버에서 세팅 스크립트를 `FORCE=1 bash setup.sh`처럼 다시 실행하고 새 password를 입력하면, `--issue --force`로 도메인 설정 파일에 새 값이 저장됩니다.
-
-도메인에서 ACME를 더 쓰지 않으면 **끕니다**. 계정을 폐기하고 챌린지 TXT를 지웁니다. 다시 켜면 서브도메인이 바뀌어 CNAME을 다시 걸어야 합니다.
+If a key has leaked or been lost, **rotate** it. The username and subdomain stay the same, so you do not need to set up the CNAME again. The old key becomes invalid immediately.
 
 ```bash
-curl -s -X DELETE <앱>/api/domains/<id>/acme -H "Authorization: Bearer $ADMIN_KEY" -H 'Content-Type: application/json'
+curl -s -X POST <app>/api/domains/<id>/acme/rotate -H "Authorization: Bearer $ADMIN_KEY" -H 'Content-Type: application/json'
 ```
 
-DNS 공급자가 실패하면 아무것도 바꾸지 않고 500 `dns_provider_error`를 돌려줍니다. 공급자가 회복된 뒤 다시 부릅니다.
+Update the acme.sh configuration on each server with the new `password` from the response: run the setup script again on the server, as in `FORCE=1 bash setup.sh`, and enter the new password; `--issue --force` then saves the new value in the domain's configuration file.
 
-## 정리 작업
+If the domain no longer uses ACME, **disable** it. This revokes the account and deletes the challenge TXT. If you enable it again, the subdomain changes and you have to set up the CNAME again.
 
-worker는 시작할 때 한 번, 그 뒤 24시간마다 챌린지 존을 DB와 대조합니다.
+```bash
+curl -s -X DELETE <app>/api/domains/<id>/acme -H "Authorization: Bearer $ADMIN_KEY" -H 'Content-Type: application/json'
+```
 
-- 활성 계정이 없는 `<uuid>.<존>` TXT를 지웁니다(폐기한 계정, 모르는 이름).
-- 활성 계정의 TXT가 DB와 다르면 DB 값으로 다시 맞춥니다.
-- 이름이 소문자 UUID가 아닌 레코드는 건드리지 않습니다. 그래서 챌린지 존에 다른 레코드가 있어도 안전합니다. 다만 챌린지 존은 이 용도로만 쓰는 것을 권장합니다.
-- 진행 중인 `/update`와 겹쳐도 계정 단위 잠금을 거치므로 발급 중인 값을 지우지 않습니다.
+If the DNS provider fails, nothing is changed and the server returns 500 `dns_provider_error`. Call it again after the provider has recovered.
 
-결과는 worker 로그(`dc logs worker`)와 감사 로그의 `txt_cleanup` 행으로 확인합니다.
+## Cleanup job
 
-worker를 재시작하면 TLS 점검과 CNAME 점검도 시작 즉시 전체를 한 번 돌립니다.
+The worker reconciles the challenge zone against the DB once at startup and every 24 hours after that.
 
-### 네트워크 요구 사항
+- It deletes `<uuid>.<zone>` TXT records that have no active account (revoked accounts, unknown names).
+- If an active account's TXT differs from the DB, it resets the record to the DB value.
+- It does not touch records whose name is not a lowercase UUID, so other records in the challenge zone are safe. Still, we recommend using the challenge zone for this purpose only.
+- Even when it overlaps with an in-progress `/update`, it goes through the per-account lock, so it never deletes a value that is being issued.
 
-TLS 점검과 CNAME 점검을 하려면 worker에서 다음 연결이 나갈 수 있어야 합니다.
+Check the results in the worker log (`dc logs worker`) and in the `txt_cleanup` rows of the audit log.
 
-- 모니터링 대상 전체로 나가는 TCP. 대상에 적은 내부 IP도 포함합니다.
-- `DNS_RESOLVER`로 나가는 UDP/53.
+When the worker restarts, it also runs a full TLS check and CNAME check immediately on startup.
 
-## 감사 로그
+### Network requirements
 
-`audit_logs` 테이블에 모든 등록, 갱신, 거부, 정리가 남습니다.
+For the TLS checks and CNAME checks, the worker must be able to open these outbound connections:
+
+- TCP to every monitored target, including any internal IPs listed on targets.
+- UDP/53 to `DNS_RESOLVER`.
+
+## Audit log
+
+The `audit_logs` table records every registration, update, denial and cleanup.
 
 ```bash
 psql-sslchk -c "SELECT at, actor, action, target, source_ip, detail FROM audit_logs ORDER BY at DESC LIMIT 30;"
 ```
 
-| `action` | 의미 | `detail` |
+| `action` | Meaning | `detail` |
 | --- | --- | --- |
-| `register` | 계정 등록 (`actor`=`admin`) | `subdomain=<uuid>` |
-| `update` | TXT 갱신 성공 | |
-| `update_denied` | `/acme/update`(옛 `/update`) 거부 | `invalid_credentials`, `ip_unauthorized`, `subdomain_mismatch`, `bad_txt`, `rate_limited` |
-| `verify_denied` | `/acme/verify`(`setup.sh`의 사전 점검) 거부 | `invalid_credentials`, `ip_unauthorized` |
-| `update_failed` | DNS 공급자나 DB 오류 | `transient: …` 또는 `config: …` |
-| `txt_cleanup` | worker 정리 (`actor`=`worker`) | `deleted`, `repaired` |
-| `login`, `login_denied` | 화면 로그인 성공·실패 (`actor`=`admin`·`anonymous`) | |
-| `domain_create`, `domain_update`, `domain_delete` | 관리 API로 도메인 변경 | |
-| `target_create`, `target_update`, `target_delete`, `target_check` | 관리 API로 모니터링 대상 변경·점검 | |
-| `acme_enable`, `acme_update`, `acme_rotate`, `acme_check`, `acme_disable` | 관리 API로 ACME 변경 | |
+| `register` | Account registered (`actor`=`admin`) | `subdomain=<uuid>` |
+| `update` | TXT update succeeded | |
+| `update_denied` | `/acme/update` (formerly `/update`) denied | `invalid_credentials`, `ip_unauthorized`, `subdomain_mismatch`, `bad_txt`, `rate_limited` |
+| `verify_denied` | `/acme/verify` (the pre-flight check in `setup.sh`) denied | `invalid_credentials`, `ip_unauthorized` |
+| `update_failed` | DNS provider or DB error | `transient: …` or `config: …` |
+| `txt_cleanup` | Worker cleanup (`actor`=`worker`) | `deleted`, `repaired` |
+| `login`, `login_denied` | UI login succeeded / failed (`actor`=`admin` / `anonymous`) | |
+| `domain_create`, `domain_update`, `domain_delete` | Domain changed through the admin API | |
+| `target_create`, `target_update`, `target_delete`, `target_check` | Monitoring target changed or checked through the admin API | |
+| `acme_enable`, `acme_update`, `acme_rotate`, `acme_check`, `acme_disable` | ACME changed through the admin API | |
 
-관리 API로 한 일은 `admin`, 로그인 실패는 `anonymous`로 남습니다. `GET <앱>/api/audit`(관리자)로도 볼 수 있습니다.
+Actions taken through the admin API are recorded as `admin`, and failed logins as `anonymous`. You can also view the log with `GET <app>/api/audit` (admin).
 
-관리자 키 인증 실패는 api 로그(`dc logs api`)에 `admin auth failed`로 남습니다. `/register`의 잠금은 `admin auth locked out`로 남지만, `/api`의 잠금은 로그에 남지 않습니다. 화면 로그인 실패는 감사 로그에 `login_denied`로도 남습니다. 키 값은 기록하지 않습니다.
+Failed admin key authentication is logged in the api log (`dc logs api`) as `admin auth failed`. A lockout on `/register` is logged as `admin auth locked out`, but a lockout on `/api` is not logged. Failed UI logins are also recorded in the audit log as `login_denied`. Key values are never recorded.
 
-감사 로그는 자동으로 지우지 않습니다. 필요하면 보존 기간을 정해 주기적으로 지웁니다.
+The audit log is not deleted automatically. If needed, choose a retention period and delete old rows periodically.
 
 ```bash
 psql-sslchk -c "DELETE FROM audit_logs WHERE at < now() - interval '1 year';"
 ```
 
-## 상태 확인
+## Health checks
 
 ```bash
-curl -s <앱>/health                             # {"db":"ok","provider":"ok"}
-dc ps                                           # api가 healthy인지
-dc logs --since 24h api worker                  # JSON 로그
+curl -s <app>/health                            # {"db":"ok","provider":"ok"}
+dc ps                                           # is api healthy?
+dc logs --since 24h api worker                  # JSON logs
 ```
 
-같은 계정에서 `update_failed`가 이어지면 다음 갱신이 실패할 수 있다는 신호입니다. 알림 기능은 아직 없으므로 감사 로그를 정기적으로 확인합니다.
+Repeated `update_failed` entries for the same account are a sign that the next renewal may fail. There is no alerting feature yet, so check the audit log regularly.
 
 ```bash
 psql-sslchk -c "SELECT target, count(*), max(at) FROM audit_logs WHERE action = 'update_failed' AND at > now() - interval '7 days' GROUP BY target;"
 ```
 
-## 문제 해결
+## Troubleshooting
 
-| 증상 | 확인할 것 |
+| Symptom | What to check |
 | --- | --- |
-| compose가 `required variable … is missing a value`로 멈춤 | `deploy/.env`에 그 변수가 비어 있습니다. [설정](configuration.md) 참고 |
-| `api`가 시작 직후 종료 | `dc logs api`. 설정 오류면 문제 있는 변수 이름이 나옵니다(예: `ADMIN_KEY must be at least 32 bytes`). |
-| `/health`가 `provider: config` | 토큰 권한(`Zone > DNS > Edit`), `CF_ZONE_ID`, 토큰의 IP 필터 |
-| `/health`가 `provider: transient` | Cloudflare 응답 지연·요청 제한. 1분 뒤 다시 확인 |
-| acme.sh가 `/acme/update`를 실패로 봄 (401) | 감사 로그의 `update_denied` 사유. `ip_unauthorized`면 `source_ip`와 계정의 `allowfrom`을 비교합니다. |
-| 401인데 감사 로그에 해당 계정 행이 없음 | `X-Api-User`가 틀렸거나 다른 계정입니다. `actor`에 보낸 값이 그대로 남습니다. |
-| 429 `too_many_attempts` | 이 IP에서 인증 실패가 쌓였습니다. 잘못된 키를 쓰는 서버를 고치고 잠시 기다립니다. |
-| `update_failed` + `config` | 토큰 권한, Zone ID, 토큰 IP 필터 |
-| `update_failed` + `transient` | Cloudflare 장애·요청 제한. acme.sh가 다음 실행 때 재시도합니다. |
-| CA 검증 실패 (TXT를 찾지 못함) | CNAME 대상 오타, 챌린지 존의 네임서버 위임, `dig TXT <fulldomain> @1.1.1.1`로 값이 보이는지 |
-| CA가 CAA 때문에 거부 | 도메인의 CAA 레코드에 `letsencrypt.org` 추가 |
-| 대시보드에 `오래됨` 표시 | worker가 멈췄거나 점검 주기(`CHECK_INTERVAL`)의 2배 넘게 점검이 안 됐습니다. `dc ps worker`, `dc logs worker`를 확인합니다. |
-| `<앱>/`이 503 "화면이 빌드되지 않았습니다" | Docker 이미지가 아니라 화면 없이 `go build`한 바이너리입니다. `make web-build` 뒤 다시 빌드하거나 이미지를 씁니다. API는 정상입니다. |
-| 발급은 됐는데 웹서버가 옛 인증서를 씀 | `--install-cert`의 `--reloadcmd`가 실행 권한이 있는지, 웹서버 설정의 인증서 경로. reload가 `sudo`를 쓰는데 비밀번호가 필요하면 갱신(cron) 때 reload가 실패합니다([확인과 해결](onboarding.md#4-자동-갱신)) |
+| compose stops with `required variable … is missing a value` | That variable is empty in `deploy/.env`. See [Configuration](configuration.md) |
+| `api` exits right after starting | `dc logs api`. For configuration errors, the name of the offending variable is shown (e.g. `ADMIN_KEY must be at least 32 bytes`). |
+| `/health` shows `provider: config` | Token permissions (`Zone > DNS > Edit`), `CF_ZONE_ID`, the token's IP filter |
+| `/health` shows `provider: transient` | Slow Cloudflare responses or rate limiting. Check again after a minute |
+| acme.sh treats `/acme/update` as failed (401) | The `update_denied` reason in the audit log. For `ip_unauthorized`, compare `source_ip` with the account's `allowfrom`. |
+| 401 but no row for that account in the audit log | `X-Api-User` is wrong or belongs to a different account. The value that was sent is recorded as-is in `actor`. |
+| 429 `too_many_attempts` | Authentication failures have piled up from this IP. Fix the server that is using the wrong key and wait a while. |
+| `update_failed` + `config` | Token permissions, Zone ID, token IP filter |
+| `update_failed` + `transient` | Cloudflare outage or rate limiting. acme.sh retries on its next run. |
+| CA validation fails (TXT not found) | A typo in the CNAME target, the name server delegation of the challenge zone, and whether `dig TXT <fulldomain> @1.1.1.1` shows the value |
+| CA refuses because of CAA | Add `letsencrypt.org` to the domain's CAA record |
+| Dashboard shows the stale badge | The worker has stopped, or no check has run for more than twice the check interval (`CHECK_INTERVAL`). Check `dc ps worker` and `dc logs worker`. |
+| `<app>/` returns a 503 page saying the UI has not been built | The binary was built with `go build` without the UI, not the Docker image. Rebuild after `make web-build`, or use the image. The API works normally. |
+| The certificate was issued but the web server still uses the old one | Whether the `--reloadcmd` of `--install-cert` has permission to run, and the certificate path in the web server configuration. If reload uses `sudo` and sudo requires a password, reload fails at renewal (cron) time ([Check and fix](onboarding.md#4-automatic-renewal)) |
 
-## 제거
+## Uninstalling
 
 ```bash
-dc down          # 컨테이너만 내림. 데이터는 pgdata 볼륨에 남는다
-dc down -v       # 데이터까지 삭제
+dc down          # stops the containers only; data stays in the pgdata volume
+dc down -v       # also deletes the data
 ```
 
-제거하기 전에 각 도메인의 `_acme-challenge` CNAME을 지우거나, 다른 DNS-01 방식으로 옮겨야 다음 갱신이 실패하지 않습니다.
+Before uninstalling, delete each domain's `_acme-challenge` CNAME or move it to another DNS-01 method; otherwise the next renewal fails.

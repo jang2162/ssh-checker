@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { useAction } from "../app/useAction.ts";
 import { Dialog } from "../components/Dialog.tsx";
 import { Notice } from "../components/Notice.tsx";
+import { t } from "../i18n/index.ts";
 
 interface Props {
   title: string;
@@ -30,7 +31,7 @@ export function ConfirmDialog({ title, children, confirmLabel, danger, onConfirm
       <div className="dialog-body">{children}</div>
       {error && <Notice kind="error">{error}</Notice>}
       <div className="actions">
-        <button type="button" className="btn" onClick={onClose}>취소</button>
+        <button type="button" className="btn" onClick={onClose}>{t("common.cancel")}</button>
         <button type="button" className={danger ? "btn danger" : "btn primary"} disabled={busy} onClick={() => void confirm()}>
           {confirmLabel}
         </button>

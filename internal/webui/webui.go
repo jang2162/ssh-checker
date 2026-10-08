@@ -7,8 +7,11 @@ import (
 	"io/fs"
 	"net/http"
 	"path"
+	"regexp"
 	"strings"
 	"time"
+
+	"ssl-checker/internal/lang"
 )
 
 // dist는 web/에서 `npm run build`가 만든 결과다. 저장소에는 .keep만 있어서 Node 없이도 go build가 된다.
@@ -19,7 +22,7 @@ var embedded embed.FS
 // csp는 화면이 같은 출처의 스크립트·스타일만 쓰게 하고, 다른 사이트가 화면을 iframe으로 감싸지 못하게 한다.
 const csp = "default-src 'self'; style-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
 
-const placeholder = `<!doctype html>
+const placeholderKO = `<!doctype html>
 <html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ssl-checker</title></head>
 <body style="font-family: system-ui, sans-serif; max-width: 40rem; margin: 3rem auto; padding: 0 1rem">
@@ -29,23 +32,41 @@ const placeholder = `<!doctype html>
 </body></html>
 `
 
+const placeholderEN = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ssl-checker</title></head>
+<body style="font-family: system-ui, sans-serif; max-width: 40rem; margin: 3rem auto; padding: 0 1rem">
+<h1>The dashboard was not built</h1>
+<p>This binary does not include the dashboard. Run <code>npm ci &amp;&amp; npm run build</code> in <code>web/</code> and build again. The Docker image builds the dashboard for you.</p>
+<p>The API (<code>/api</code>) and <code>/llms.txt</code> work without the dashboard.</p>
+</body></html>
+`
+
 // Handler는 내장한 화면을 제공하고, 그 밖의 요청은 next로 넘긴다.
-func Handler(next http.Handler) http.Handler {
+func Handler(next http.Handler, l lang.Lang) http.Handler {
 	files, err := fs.Sub(embedded, "dist")
 	if err != nil {
 		panic(err) // dist는 컴파일할 때 내장돼 항상 있다
 	}
-	return New(next, files)
+	return New(next, files, l)
 }
 
 // New는 files(Vite 빌드 출력)를 제공하는 핸들러다. 테스트가 가짜 파일 시스템을 넣을 수 있게 Handler와 나눴다.
-func New(next http.Handler, files fs.FS) http.Handler {
-	return &handler{next: next, files: files}
+func New(next http.Handler, files fs.FS, l lang.Lang) http.Handler {
+	return &handler{next: next, files: files, lang: l}
 }
 
 type handler struct {
 	next  http.Handler
 	files fs.FS
+	lang  lang.Lang // UI_LANGUAGE. index.html의 <html lang>에 넣어, 화면이 이 언어로 뜬다
+}
+
+var htmlLangRE = regexp.MustCompile(`<html lang="[A-Za-z-]*"`)
+
+// withLang은 index.html의 <html lang>을 서버가 정한 언어로 바꾼다. 화면은 이 값을 읽어 언어를 정한다.
+func withLang(index []byte, l lang.Lang) []byte {
+	return htmlLangRE.ReplaceAll(index, []byte(`<html lang="`+string(l)+`"`))
 }
 
 // reserved는 서버 API가 맡는 경로다. 화면이 가로채면 안 된다(GET /update의 405 같은 기존 응답이 달라진다).
@@ -75,9 +96,12 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// 화면 경로(/domains/3 등)는 SPA가 처리한다.
 		name = "index.html"
 		if data, err = h.read(name); err != nil {
-			servePlaceholder(w)
+			servePlaceholder(w, h.lang)
 			return
 		}
+	}
+	if name == "index.html" {
+		data = withLang(data, h.lang)
 	}
 	hd := w.Header()
 	hd.Set("Content-Security-Policy", csp)
@@ -100,11 +124,11 @@ func (h *handler) read(name string) ([]byte, error) {
 	return fs.ReadFile(h.files, name)
 }
 
-func servePlaceholder(w http.ResponseWriter) {
+func servePlaceholder(w http.ResponseWriter, l lang.Lang) {
 	hd := w.Header()
 	hd.Set("Content-Type", "text/html; charset=utf-8")
 	hd.Set("Cache-Control", "no-store")
 	hd.Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusServiceUnavailable)
-	_, _ = w.Write([]byte(placeholder))
+	_, _ = w.Write([]byte(l.Pick(placeholderEN, placeholderKO)))
 }

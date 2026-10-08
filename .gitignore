@@ -4,7 +4,7 @@
 .env
 .claude/worktrees/
 
-# 대시보드(SPA) 빌드 결과와 의존성. dist/.keep만 커밋해 Node 없이도 go build가 되게 한다.
+# Dashboard (SPA) build output and dependencies. Only dist/.keep is committed so go build works without Node.
 /internal/webui/dist/*
 !/internal/webui/dist/.keep
 /web/node_modules/

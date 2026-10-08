@@ -1,7 +1,7 @@
 //go:build compat
 
-// Package compat은 같은 /update 요청을 원본 acme-dns와 ssl-checker에 보내 응답이 같은지 확인한다.
-// scripts/compat.sh가 두 서버를 띄운 뒤 실행한다.
+// Package compat sends the same /update requests to the original acme-dns and to ssl-checker and checks that the responses match.
+// scripts/compat.sh starts both servers and then runs it.
 package compat
 
 import (
@@ -94,7 +94,7 @@ func TestUpdateMatchesAcmeDNS(t *testing.T) {
 	cases := []struct {
 		name       string
 		wantStatus int
-		wantTxt    string // 200일 때 기대하는 본문의 txt 값
+		wantTxt    string // expected txt value in the body when the status is 200
 		build      func(c creds) (map[string]string, string)
 	}{
 		{"valid", 200, valid, func(c creds) (map[string]string, string) { return auth(c), body(c.Subdomain, valid) }},
@@ -131,7 +131,7 @@ func TestUpdateMatchesAcmeDNS(t *testing.T) {
 			h2, b2 := c.build(ours)
 			r1 := post(t, origURL+"/update", h1, b1)
 			r2 := post(t, oursURL+"/update", h2, b2)
-			// 두 서버가 서로 같은 것만으로는 부족하다: 둘 다 같은 오류를 내도 통과해 버린다.
+			// Both servers agreeing with each other is not enough: they would pass even if both returned the same error.
 			if r1.Status != c.wantStatus || r2.Status != c.wantStatus {
 				t.Errorf("want status %d: acme-dns %d %v, ssl-checker %d %v", c.wantStatus, r1.Status, r1.Body, r2.Status, r2.Body)
 			}

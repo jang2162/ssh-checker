@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"ssl-checker/internal/config"
+	"ssl-checker/internal/lang"
 )
 
 func env(m map[string]string) func(string) string {
@@ -161,5 +162,27 @@ func TestPublicURL(t *testing.T) {
 		if _, err := config.Load(config.RoleAPI, env(m)); err == nil || !strings.Contains(err.Error(), "PUBLIC_URL") {
 			t.Errorf("PUBLIC_URL=%q err = %v", bad, err)
 		}
+	}
+}
+
+// UI_LANGUAGE는 api가 읽는다. 비우면 en이고, 모르는 값은 시작하지 않는다.
+func TestLoadUILanguage(t *testing.T) {
+	for in, want := range map[string]lang.Lang{"": lang.EN, "en": lang.EN, "ko": lang.KO, " KO ": lang.KO} {
+		m := apiEnv()
+		m["UI_LANGUAGE"] = in
+		cfg, err := config.Load(config.RoleAPI, env(m))
+		if err != nil || cfg.Language != want {
+			t.Errorf("UI_LANGUAGE=%q = %q, %v; want %q", in, cfg.Language, err, want)
+		}
+	}
+	m := apiEnv()
+	m["UI_LANGUAGE"] = "fr"
+	if _, err := config.Load(config.RoleAPI, env(m)); err == nil || !strings.Contains(err.Error(), "UI_LANGUAGE") {
+		t.Errorf("fr should be rejected: %v", err)
+	}
+	// worker와 migrate는 언어를 쓰지 않아서 잘못된 값이어도 시작한다.
+	m = map[string]string{"DATABASE_URL": "postgres://x", "UI_LANGUAGE": "fr"}
+	if _, err := config.Load(config.RoleMigrate, env(m)); err != nil {
+		t.Errorf("migrate must ignore UI_LANGUAGE: %v", err)
 	}
 }

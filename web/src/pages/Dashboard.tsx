@@ -7,11 +7,12 @@ import { REFRESH_MS, useResource } from "../app/useResource.ts";
 import { Notice } from "../components/Notice.tsx";
 import { ReasonTags, StatusBadge } from "../components/StatusBadge.tsx";
 import { AddDomainDialog } from "../dialogs/AddDomainDialog.tsx";
+import { t } from "../i18n/index.ts";
 import { daysLeftText, formatDate, formatDateTime, relativeTime } from "../lib/format.ts";
-import { CNAME_LABEL, isStale, parseStatus, sortByUrgency, STATUS_LABEL, STATUS_ORDER } from "../lib/status.ts";
+import { cnameLabel, isStale, parseStatus, sortByUrgency, statusLabel, STATUS_ORDER } from "../lib/status.ts";
 
 export function Dashboard() {
-  usePageTitle("대시보드");
+  usePageTitle(t("nav.dashboard"));
   const { admin, checkIntervalMs } = useApp();
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
@@ -38,21 +39,21 @@ export function Dashboard() {
   return (
     <>
       <div className="page-head">
-        <h1>도메인 {data ? `${data.summary.domains}개` : ""}</h1>
+        <h1>{data ? t("dashboard.headingCount", { count: data.summary.domains }) : t("dashboard.heading")}</h1>
         {admin && (
-          <button type="button" className="btn primary" onClick={() => setAdding(true)}>도메인 추가</button>
+          <button type="button" className="btn primary" onClick={() => setAdding(true)}>{t("addDomain.title")}</button>
         )}
       </div>
 
-      {error && <Notice kind="error">{data ? `새로 고치지 못했습니다: ${error}` : error}</Notice>}
+      {error && <Notice kind="error">{data ? t("common.refreshFailed", { error }) : error}</Notice>}
       {anyStale && (
         <Notice kind="warning">
-          일부 점검 결과가 오래됐습니다(점검 주기의 2배 넘게 지남). 상태는 점검할 때 저장되므로, worker가 멈췄다면 아래 "정상"도 최신이 아닐 수 있습니다.
+          {t("dashboard.stale")}
         </Notice>
       )}
 
       {data && (
-        <div className="summary" role="group" aria-label="상태별 도메인 수">
+        <div className="summary" role="group" aria-label={t("dashboard.summaryLabel")}>
           {STATUS_ORDER.map((s) => (
             <button
               key={s}
@@ -62,22 +63,21 @@ export function Dashboard() {
               onClick={() => toggle(s)}
             >
               <span className="summary-count">{data.summary[s]}</span>
-              <span className="summary-label">{STATUS_LABEL[s]}</span>
+              <span className="summary-label">{statusLabel(s)}</span>
             </button>
           ))}
         </div>
       )}
 
-      {loading && !data && <p className="muted">불러오는 중…</p>}
+      {loading && !data && <p className="muted">{t("common.loading")}</p>}
 
       {data && rows.length === 0 && (
         <div className="empty">
           {filter ? (
-            <p>"{STATUS_LABEL[filter]}" 상태인 도메인이 없습니다.</p>
+            <p>{t("dashboard.noneWithStatus", { status: statusLabel(filter) })}</p>
           ) : (
             <p>
-              등록된 도메인이 없습니다.
-              {admin ? " 위의 \"도메인 추가\"로 시작하세요." : " 관리자로 로그인하면 도메인을 추가할 수 있습니다."}
+              {admin ? t("dashboard.emptyAdmin") : t("dashboard.emptyViewer")}
             </p>
           )}
         </div>
@@ -88,12 +88,12 @@ export function Dashboard() {
           <table className="table">
             <thead>
               <tr>
-                <th>상태</th>
-                <th>도메인</th>
-                <th>가장 이른 만료</th>
-                <th>대상</th>
+                <th>{t("col.status")}</th>
+                <th>{t("col.domain")}</th>
+                <th>{t("col.earliestExpiry")}</th>
+                <th>{t("col.targets")}</th>
                 <th>ACME</th>
-                <th>마지막 점검</th>
+                <th>{t("col.lastChecked")}</th>
               </tr>
             </thead>
             <tbody>
@@ -115,16 +115,16 @@ export function Dashboard() {
                   <td>
                     {d.acme.enabled ? (
                       <span>
-                        켜짐 <span className="muted small-text">{d.acme.cname_status ? CNAME_LABEL[d.acme.cname_status] : ""}</span>
+                        {t("dashboard.acmeOn")} <span className="muted small-text">{d.acme.cname_status ? cnameLabel(d.acme.cname_status) : ""}</span>
                       </span>
                     ) : (
-                      <span className="muted">꺼짐</span>
+                      <span className="muted">{t("dashboard.acmeOff")}</span>
                     )}
                   </td>
                   <td className="nowrap" title={formatDateTime(d.last_checked_at)}>
                     {relativeTime(d.last_checked_at, now)}
                     {isStale(d.last_checked_at, checkIntervalMs, now) && (
-                      <span className="tag tag-warning" title="점검이 멈춘 것 같습니다">오래됨</span>
+                      <span className="tag tag-warning" title={t("dashboard.staleTitle")}>{t("dashboard.staleTag")}</span>
                     )}
                   </td>
                 </tr>

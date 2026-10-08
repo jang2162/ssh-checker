@@ -1,18 +1,18 @@
-# 호스트 포트를 열지 않고 Caddy 컨테이너 뒤에서 돌릴 때 compose.yaml에 덧붙이는 파일.
+# Add to compose.yaml to run behind a Caddy container without publishing a host port.
 #   docker compose -f compose.yaml -f compose.caddy.yaml --env-file .env up -d
 #
-# api를 Caddy가 붙어 있는 외부 Docker 네트워크(CADDY_NETWORK, 기본 caddy)에 연결한다.
-# Caddy에서는 reverse_proxy ssl-checker-api:8080 으로 넘긴다(deploy/Caddyfile.example).
-# db·migrate·worker는 이 네트워크에 붙이지 않는다.
+# Attaches the api to the external Docker network Caddy is on (CADDY_NETWORK, default caddy).
+# In Caddy, proxy to it with reverse_proxy ssl-checker-api:8080 (see deploy/Caddyfile.example).
+# db, migrate and worker are not attached to that network.
 #
-# TRUSTED_PROXIES에는 Caddy의 주소를 넣어야 실제 클라이언트 IP로 allowfrom을 판단한다.
-# docs/guide/configuration.md의 「Caddy 뒤에서 돌릴 때」 참고.
+# Put Caddy's address in TRUSTED_PROXIES so allowfrom is judged on the real client IP.
+# See "Running behind Caddy" in docs/guide/configuration.md.
 services:
   api:
     networks:
       default: {}
       caddy:
-        # 같은 네트워크의 다른 스택과 서비스 이름(api)이 겹치지 않게 별칭으로 찾는다.
+        # Reach it by alias so the service name (api) cannot clash with other stacks on the same network.
         aliases: [ssl-checker-api]
 
 networks:

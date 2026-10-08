@@ -2,6 +2,7 @@ import { useState, type FormEvent, type ReactNode } from "react";
 import { useAction } from "../app/useAction.ts";
 import { Dialog } from "../components/Dialog.tsx";
 import { Notice } from "../components/Notice.tsx";
+import { t } from "../i18n/index.ts";
 import { splitList } from "../lib/input.ts";
 
 interface Props {
@@ -33,15 +34,15 @@ export function AllowFromDialog({ title, submitLabel, initial, hint, onSubmit, o
     <Dialog title={title} onClose={onClose}>
       <form onSubmit={(e) => void submit(e)}>
         <label className="field">
-          <span>허용 IP (한 줄에 하나, IP 또는 CIDR)</span>
+          <span>{t("allow.label")}</span>
           <textarea value={text} onChange={(e) => setText(e.target.value)} rows={4} placeholder={"203.0.113.10/32\n10.0.1.0/24"} autoFocus />
-          <small>/update를 부를 수 있는 서버입니다. 최대 64개.</small>
+          <small>{t("allow.hint")}</small>
         </label>
         {hint}
-        {list.length === 0 && <Notice kind="warning">목록이 비어 있으면 키를 아는 누구나 어디서든 /update를 부를 수 있습니다. 가능하면 서버 IP를 지정하세요.</Notice>}
+        {list.length === 0 && <Notice kind="warning">{t("allow.emptyWarning")}</Notice>}
         {error && <Notice kind="error">{error}</Notice>}
         <div className="actions">
-          <button type="button" className="btn" onClick={onClose}>취소</button>
+          <button type="button" className="btn" onClick={onClose}>{t("common.cancel")}</button>
           <button type="submit" className="btn primary" disabled={busy}>{submitLabel}</button>
         </div>
       </form>

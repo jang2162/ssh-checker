@@ -14,10 +14,10 @@ import (
 const usage = `usage: ssl-checker <command> [flags]
 
 commands:
-  migrate                    DB 마이그레이션을 적용하고 종료한다
-  serve [--listen :8080]     acme-dns 호환 API와 조회 API(/api)를 연다
-  worker                     주기 작업(TLS 점검, CNAME 확인, TXT·기록 정리)을 돌린다
-  healthcheck [--url URL]    실행 중인 api의 /health를 확인한다
+  migrate                    apply database migrations and exit
+  serve [--listen :8080]     serve the acme-dns compatible API, the /api API and the dashboard
+  worker                     run the periodic jobs (TLS checks, CNAME checks, TXT and history cleanup)
+  healthcheck [--url URL]    check /health of a running api
 `
 
 func main() {

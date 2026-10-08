@@ -11,6 +11,7 @@ import { TargetCard } from "../components/TargetCard.tsx";
 import { ConfirmDialog } from "../dialogs/ConfirmDialog.tsx";
 import { MemoDialog } from "../dialogs/MemoDialog.tsx";
 import { TargetDialog } from "../dialogs/TargetDialog.tsx";
+import { T, t } from "../i18n/index.ts";
 import { isStale, latestCheckedAt } from "../lib/status.ts";
 import { NotFound } from "./NotFound.tsx";
 
@@ -23,15 +24,15 @@ export function DomainDetail() {
   const [dialog, setDialog] = useState<"memo" | "target" | "delete" | null>(null);
 
   const { data, error, loading, reload } = useResource(() => api.domain(id), [id], REFRESH_MS);
-  usePageTitle(data?.fqdn ?? "도메인");
+  usePageTitle(data?.fqdn ?? t("detail.titleFallback"));
 
   if (!valid) return <NotFound />;
-  if (loading && !data) return <p className="muted">불러오는 중…</p>;
+  if (loading && !data) return <p className="muted">{t("common.loading")}</p>;
   if (!data) {
     return (
       <>
         <Notice kind="error">{error}</Notice>
-        <p><Link to="/">← 대시보드로</Link></p>
+        <p><Link to="/">{t("detail.backToDashboard")}</Link></p>
       </>
     );
   }
@@ -42,41 +43,41 @@ export function DomainDetail() {
   const onChanged = () => void reload();
   return (
     <>
-      <p className="crumb"><Link to="/">← 대시보드</Link></p>
+      <p className="crumb"><Link to="/">{t("detail.crumb")}</Link></p>
       <div className="page-head">
         <div>
           <h1>
             {data.fqdn} <StatusBadge status={data.status} />
           </h1>
           <div className="muted">
-            {data.memo || "메모 없음"}
+            {data.memo || t("detail.noMemo")}
           </div>
         </div>
         {admin && (
           <div className="actions">
-            <button type="button" className="btn" onClick={() => setDialog("memo")}>메모 수정</button>
-            <button type="button" className="btn danger-text" onClick={() => setDialog("delete")}>도메인 삭제</button>
+            <button type="button" className="btn" onClick={() => setDialog("memo")}>{t("memo.title")}</button>
+            <button type="button" className="btn danger-text" onClick={() => setDialog("delete")}>{t("detail.delete")}</button>
           </div>
         )}
       </div>
 
-      {error && <Notice kind="error">새로 고치지 못했습니다: {error}</Notice>}
+      {error && <Notice kind="error">{t("common.refreshFailed", { error })}</Notice>}
       {stale && (
         <Notice kind="warning">
-          이 도메인의 점검 결과가 오래됐습니다(점검 주기의 2배 넘게 지남). 상태는 점검할 때 저장되므로 worker가 멈췄다면 위 상태도 최신이 아닐 수 있습니다.
+          {t("detail.stale")}
         </Notice>
       )}
       <ReasonList reasons={data.reasons} />
 
       <div className="section-head">
-        <h2>모니터링 대상</h2>
+        <h2>{t("detail.targets")}</h2>
         {admin && (
-          <button type="button" className="btn primary small" onClick={() => setDialog("target")}>대상 추가</button>
+          <button type="button" className="btn primary small" onClick={() => setDialog("target")}>{t("detail.addTarget")}</button>
         )}
       </div>
       {data.targets.length === 0 ? (
         <div className="empty">
-          <p>모니터링 대상이 없습니다.{admin ? " \"대상 추가\"로 점검할 호스트를 등록하세요." : ""}</p>
+          <p>{admin ? t("detail.noTargetsAdmin") : t("detail.noTargets")}</p>
         </div>
       ) : (
         data.targets.map((t) => (
@@ -94,8 +95,8 @@ export function DomainDetail() {
       )}
       {dialog === "delete" && (
         <ConfirmDialog
-          title="도메인 삭제"
-          confirmLabel="삭제"
+          title={t("detail.delete")}
+          confirmLabel={t("common.delete")}
           danger
           onClose={() => setDialog(null)}
           onConfirm={async () => {
@@ -103,8 +104,8 @@ export function DomainDetail() {
             navigate("/");
           }}
         >
-          <p><strong>{data.fqdn}</strong>과 모든 대상, 점검 이력을 삭제합니다.</p>
-          {data.acme.enabled && <p>ACME가 켜져 있어서 먼저 끄고 챌린지 TXT를 지웁니다. 서버의 acme.sh 갱신은 더 이상 되지 않습니다.</p>}
+          <p><T k="detail.deleteBody" vars={{ fqdn: data.fqdn }} /></p>
+          {data.acme.enabled && <p>{t("detail.deleteAcme")}</p>}
         </ConfirmDialog>
       )}
     </>

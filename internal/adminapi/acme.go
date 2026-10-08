@@ -111,9 +111,9 @@ func (a *API) writeCredentials(w http.ResponseWriter, r *http.Request, status in
 	}
 	base := a.PublicURLFor(r)
 	if base == "" {
-		base = "<ssl-checker 주소>"
+		base = a.Lang.UnknownBaseURL()
 	}
-	setup := buildSetup(base, "/etc/ssl/"+fqdn)
+	setup := buildSetup(base, "/etc/ssl/"+fqdn, a.Lang)
 	w.Header().Set("Cache-Control", "no-store")
 	httpx.WriteJSON(w, status, credentials{
 		Username: reg.Username, Password: reg.Password, Subdomain: reg.Subdomain, FullDomain: reg.FullDomain,

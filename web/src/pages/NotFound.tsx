@@ -1,12 +1,13 @@
 import { Link } from "react-router-dom";
 import { usePageTitle } from "../app/usePageTitle.ts";
+import { t } from "../i18n/index.ts";
 
 export function NotFound() {
-  usePageTitle("찾을 수 없음");
+  usePageTitle(t("notFound.title"));
   return (
     <div className="empty">
-      <h1>페이지를 찾을 수 없습니다</h1>
-      <p><Link to="/">대시보드로 가기</Link></p>
+      <h1>{t("notFound.heading")}</h1>
+      <p><Link to="/">{t("notFound.home")}</Link></p>
     </div>
   );
 }

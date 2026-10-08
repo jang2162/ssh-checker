@@ -12,15 +12,15 @@ db-down:
 test:
 	TEST_DATABASE_URL='$(TEST_DATABASE_URL)' go test ./...
 
-# setup.sh 테스트를 Linux(bash 5)에서 돌린다. macOS 기본 bash 3.2는 set -u에서 값이 없는 변수를 ${VAR#패턴}으로 써도
-# 오류를 내지 않아서, 서버(Linux)에서만 터지는 문제를 놓친다. Docker가 필요하다.
+# Run the setup.sh tests on Linux (bash 5). The macOS default bash 3.2 does not fail when an unset variable is used as
+# ${VAR#pattern} under set -u, so it misses problems that only appear on servers (Linux). Needs Docker.
 script-test-linux:
 	docker run --rm -v "$(CURDIR)":/src -w /src golang:1.27 go test ./internal/adminapi -run 'Setup|Script' -count=1
 
-# 대시보드(web/). Go 테스트와 따로 돌린다. Node 24가 필요하다.
+# Dashboard (web/). Run separately from the Go tests. Needs Node 24.
 web-test:
 	cd web && npm ci && npm test
 
-# 빌드 결과는 internal/webui/dist로 간다(바이너리가 내장한다).
+# The build output goes to internal/webui/dist (the binary embeds it).
 web-build:
 	cd web && npm ci && npm run build

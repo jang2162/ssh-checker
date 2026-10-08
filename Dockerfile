@@ -1,14 +1,14 @@
 # syntax=docker/dockerfile:1
-# 1) 대시보드(web/)를 빌드한다. 타입 검사와 로직 테스트가 통과해야 이미지가 만들어진다.
+# 1) Build the dashboard (web/). The image is only built if the type check and logic tests pass.
 FROM node:24 AS web
 WORKDIR /src/web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci
 COPY web/ ./
-# vite.config.ts가 결과를 ../internal/webui/dist로 내보낸다.
+# vite.config.ts writes the output to ../internal/webui/dist.
 RUN npm test && npm run build
 
-# 2) 빌드 결과를 내장해 Go 바이너리를 만든다.
+# 2) Build the Go binary with the dashboard output embedded.
 FROM golang:1.27 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -17,7 +17,7 @@ COPY . .
 COPY --from=web /src/internal/webui/dist ./internal/webui/dist
 RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/ssl-checker ./cmd/ssl-checker
 
-# distroless/static: 셸·curl 없음. CA 인증서는 포함돼 Cloudflare HTTPS 호출이 된다.
+# distroless/static: no shell, no curl. CA certificates are included, so HTTPS calls to Cloudflare work.
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/ssl-checker /usr/local/bin/ssl-checker
 USER nonroot

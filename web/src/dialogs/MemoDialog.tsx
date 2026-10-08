@@ -3,6 +3,7 @@ import { api } from "../api/endpoints.ts";
 import { useAction } from "../app/useAction.ts";
 import { Dialog } from "../components/Dialog.tsx";
 import { Notice } from "../components/Notice.tsx";
+import { t } from "../i18n/index.ts";
 
 export function MemoDialog({ domainId, initial, onClose, onSaved }: { domainId: number; initial: string; onClose: () => void; onSaved: () => void }) {
   const [memo, setMemo] = useState(initial);
@@ -21,16 +22,16 @@ export function MemoDialog({ domainId, initial, onClose, onSaved }: { domainId: 
   }
 
   return (
-    <Dialog title="메모 수정" onClose={onClose}>
+    <Dialog title={t("memo.title")} onClose={onClose}>
       <form onSubmit={(e) => void submit(e)}>
         <label className="field">
-          <span>메모</span>
+          <span>{t("common.memo")}</span>
           <input value={memo} onChange={(e) => setMemo(e.target.value)} maxLength={500} autoFocus />
         </label>
         {error && <Notice kind="error">{error}</Notice>}
         <div className="actions">
-          <button type="button" className="btn" onClick={onClose}>취소</button>
-          <button type="submit" className="btn primary" disabled={busy}>저장</button>
+          <button type="button" className="btn" onClick={onClose}>{t("common.cancel")}</button>
+          <button type="submit" className="btn primary" disabled={busy}>{t("common.save")}</button>
         </div>
       </form>
     </Dialog>

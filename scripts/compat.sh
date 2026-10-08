@@ -1,5 +1,5 @@
 #!/bin/sh
-# 원본 acme-dns와 ssl-checker(memory 공급자)를 띄우고 /update 응답을 대조한다.
+# Start the original acme-dns and ssl-checker (memory provider) and compare their /update responses.
 set -eu
 cd "$(dirname "$0")/.."
 COMPOSE="docker compose -f test/compat/compose.yaml"
@@ -23,7 +23,7 @@ wait_for() {
 wait_for http://127.0.0.1:18080/health
 wait_for http://127.0.0.1:18081/health
 
-# PASS를 어떤 acme-dns 버전과 대조했는지 추적할 수 있게 실제 이미지 다이제스트를 남긴다.
+# Record the real image digest so it is traceable which acme-dns version a PASS was compared against.
 ACMEDNS_REF=$(docker inspect --format '{{.Config.Image}}' sslchk-compat-acmedns-1)
 echo "acme-dns image: $ACMEDNS_REF"
 docker image inspect --format 'acme-dns digest: {{index .RepoDigests 0}} id: {{.Id}} created: {{.Created}}' "$ACMEDNS_REF"

@@ -1,51 +1,53 @@
-# API 레퍼런스
+# API reference
 
-모든 요청과 응답 본문은 JSON입니다. 오류는 원본 acme-dns처럼 `{"error": "<코드>"}` 형태로 돌려줍니다. 요청 본문은 4KB까지 받습니다.
+**English** | [한국어](api.ko.md)
 
-| 메서드 | 경로 | 호출 주체 | 인증 |
+All request and response bodies are JSON. Errors are returned as `{"error": "<code>"}`, like the original acme-dns. Request bodies are accepted up to 4KB.
+
+| Method | Path | Caller | Authentication |
 | --- | --- | --- | --- |
-| `POST` | `/acme/update` (옛 `/update`) | 각 서버의 acme.sh (`dns_acmedns`) | `X-Api-User`, `X-Api-Key` |
-| `POST` | `/acme/verify` (옛 `/verify`) | 세팅 스크립트(사전 점검) | `X-Api-User`, `X-Api-Key` |
-| `GET` | `/acme/setup.sh` | 인증서를 받을 서버 | 없음 |
-| `POST` | `/register` | 관리자 | `Authorization: Bearer <ADMIN_KEY>` |
-| `GET` | `/health` | 모니터링, 컨테이너 헬스체크 | 없음 |
+| `POST` | `/acme/update` (formerly `/update`) | acme.sh on each server (`dns_acmedns`) | `X-Api-User`, `X-Api-Key` |
+| `POST` | `/acme/verify` (formerly `/verify`) | Setup script (pre-flight check) | `X-Api-User`, `X-Api-Key` |
+| `GET` | `/acme/setup.sh` | Server that will receive the certificate | None |
+| `POST` | `/register` | Administrator | `Authorization: Bearer <ADMIN_KEY>` |
+| `GET` | `/health` | Monitoring, container health check | None |
 
-인증서를 받는 서버가 부르는 경로는 `/acme/*` 하나에 모여 있습니다(API는 `update`, `verify`, 스크립트는 `setup.sh`). 리버스 프록시에서 이 접두사만 바깥에 열면 되고, 나머지(`/api/*`, 화면, `/register`)는 내부망에 둘 수 있습니다. acme.sh에는 `ACMEDNS_BASE_URL=<주소>/acme`를 주면 `/acme/update`를 부릅니다(세팅 스크립트가 이렇게 정합니다). 루트의 `/update`, `/verify`는 기존 설정을 위해 같은 동작으로 남아 있습니다.
+Every path called by servers that receive certificates lives under a single prefix, `/acme/*` (the APIs `update` and `verify`, and the script `setup.sh`). You only need to expose this prefix through the reverse proxy; the rest (`/api/*`, the UI, `/register`) can stay on the internal network. If you give acme.sh `ACMEDNS_BASE_URL=<address>/acme`, it calls `/acme/update` (this is what the setup script configures). The root paths `/update` and `/verify` remain with the same behavior for existing configurations.
 
 ## POST /acme/update
 
-챌린지 TXT 값을 갱신합니다. 요청·응답 형식이 acme-dns의 `/update`와 같습니다. acme.sh `dns_acmedns`로 동작을 확인했습니다. lego나 certbot의 acme-dns 연동도 같은 형식을 쓰지만, 이들은 계정을 직접 `/register`하려 할 수 있습니다. 그럴 때는 미리 등록한 자격 증명을 쓰도록 설정해야 하며, 아직 검증하지 않았습니다.
+Updates the challenge TXT value. The request and response format is the same as acme-dns's `/update`. Verified with acme.sh `dns_acmedns`. The acme-dns integrations of lego and certbot use the same format, but they may try to `/register` an account themselves. In that case they must be configured to use pre-registered credentials, and this has not been verified yet.
 
 ```http
 POST /acme/update
 X-Api-User: c36f50e8-4632-44f0-83fe-e070fef28a10
-X-Api-Key: <등록 때 받은 password>
+X-Api-Key: <password received at registration>
 Content-Type: application/json
 
-{"subdomain": "8e5700ea-a4bf-41c7-8a77-e990661dcc6a", "txt": "<43자 검증 값>"}
+{"subdomain": "8e5700ea-a4bf-41c7-8a77-e990661dcc6a", "txt": "<43-character validation value>"}
 ```
 
-성공하면 `200`과 `{"txt": "<저장한 값>"}`을 돌려줍니다.
+On success it returns `200` and `{"txt": "<stored value>"}`.
 
-처리 규칙:
+Processing rules:
 
-- `txt`는 ACME DNS-01 검증 값입니다. 정확히 43자이고 `[A-Za-z0-9_-]`만 씁니다.
-- 서브도메인마다 **최근 값 2개**를 유지합니다. 3번째 값이 오면 가장 오래된 값을 교체합니다. 이미 있는 값이 다시 오면 그대로 둡니다. acme.sh는 TXT 삭제를 호출하지 않으므로 이 규칙이 정리 역할도 합니다.
-- DNS 공급자에 기록이 성공했을 때만 DB에 저장합니다. 공급자가 실패하면 아무것도 바뀌지 않고 5xx를 돌려주므로, acme.sh가 실패로 보고 재시도합니다.
-- 같은 계정의 요청은 순서대로 처리합니다. `a.com`과 `*.a.com` 값이 동시에 와도 둘 다 남습니다.
+- `txt` is the ACME DNS-01 validation value. It is exactly 43 characters and uses only `[A-Za-z0-9_-]`.
+- The **2 most recent values** are kept per subdomain. When a 3rd value arrives, it replaces the oldest one. If an existing value arrives again, nothing changes. acme.sh never calls TXT deletion, so this rule also serves as cleanup.
+- The value is stored in the DB only if writing it to the DNS provider succeeded. If the provider fails, nothing changes and a 5xx is returned, so acme.sh treats it as a failure and retries.
+- Requests for the same account are processed in order. Even if values for `a.com` and `*.a.com` arrive at the same time, both are kept.
 
-| 상태 | `error` | 원인 |
+| Status | `error` | Cause |
 | --- | --- | --- |
-| 401 | `forbidden` | 사용자·키 불일치, 폐기된 계정, `allowfrom` 밖의 IP, 본문 `subdomain`이 계정과 다름, 본문 JSON 오류. 원본 acme-dns처럼 이유를 구분하지 않습니다. 이유는 감사 로그에 남습니다. |
-| 400 | `bad_txt` | `txt` 형식 오류 |
-| 429 | `rate_limited` | 계정별 갱신 한도 초과 (10번 연속, 이후 6초에 1번) |
-| 429 | `too_many_attempts` | 이 IP의 인증 실패 한도 초과 (20번, 이후 3초에 1번). 이 응답은 감사 로그에 남지 않습니다. |
-| 500 | `dns_provider_error` | DNS 공급자 기록 실패. 감사 로그 `detail`에 `transient`(재시도) 또는 `config`(설정 확인)가 남습니다. |
-| 500 | `db_error` | DB 오류 |
+| 401 | `forbidden` | Username/key mismatch, revoked account, IP outside `allowfrom`, body `subdomain` differs from the account, malformed body JSON. Like the original acme-dns, the reasons are not distinguished. The reason is recorded in the audit log. |
+| 400 | `bad_txt` | Malformed `txt` |
+| 429 | `rate_limited` | Per-account update limit exceeded (10 in a row, then 1 every 6 seconds) |
+| 429 | `too_many_attempts` | Authentication failure limit for this IP exceeded (20, then 1 every 3 seconds). This response is not recorded in the audit log. |
+| 500 | `dns_provider_error` | Writing to the DNS provider failed. The audit log `detail` records `transient` (retry) or `config` (check the configuration). |
+| 500 | `db_error` | DB error |
 
 ## POST /register
 
-도메인의 검증 계정을 만듭니다. 관리자 전용입니다.
+Creates the validation account for a domain. Administrators only.
 
 ```http
 POST /register
@@ -55,150 +57,150 @@ Content-Type: application/json
 {"domain": "a.com", "allowfrom": ["10.0.1.0/24", "10.0.2.15"]}
 ```
 
-| 필드 | 필수 | 설명 |
+| Field | Required | Description |
 | --- | --- | --- |
-| `domain` | 예 | 인증서를 받을 도메인. 소문자로 정규화하고 끝의 점은 지웁니다. 와일드카드는 받지 않습니다. |
-| `allowfrom` | 아니오 | `/update`를 허용할 CIDR이나 IP 목록. IP는 `/32`(IPv6는 `/128`)로 바꿉니다. 비우면 모든 IP를 허용합니다. |
+| `domain` | Yes | The domain to get a certificate for. Normalized to lowercase, and a trailing dot is removed. Wildcards are not accepted. |
+| `allowfrom` | No | List of CIDRs or IPs allowed to call `/update`. IPs are converted to `/32` (`/128` for IPv6). If empty, all IPs are allowed. |
 
-성공하면 `201`을 돌려줍니다. 응답에는 `Cache-Control: no-store`가 붙습니다.
+On success it returns `201`. The response carries `Cache-Control: no-store`.
 
 ```json
 {
   "username": "c36f50e8-4632-44f0-83fe-e070fef28a10",
-  "password": "<40자, 이때 한 번만 나옴>",
+  "password": "<40 characters, shown only this once>",
   "fulldomain": "8e5700ea-a4bf-41c7-8a77-e990661dcc6a.acme-chk.example",
   "subdomain": "8e5700ea-a4bf-41c7-8a77-e990661dcc6a",
   "allowfrom": ["10.0.1.0/24", "10.0.2.15/32"]
 }
 ```
 
-- `username`과 `subdomain`은 무작위 UUID입니다. 도메인 이름에서 계산하지 않습니다.
-- `fulldomain`은 `_acme-challenge.<domain>` CNAME이 가리킬 대상입니다.
+- `username` and `subdomain` are random UUIDs. They are not derived from the domain name.
+- `fulldomain` is the target that the `_acme-challenge.<domain>` CNAME points to.
 
-| 상태 | `error` | 원인 |
+| Status | `error` | Cause |
 | --- | --- | --- |
-| 400 | `malformed_json_payload` | 본문 JSON 오류 |
-| 400 | `invalid_allowfrom_cidr` | `allowfrom` 항목 형식 오류 |
-| 400 | `invalid_domain` | 도메인 형식 오류, 와일드카드 |
-| 401 | `unauthorized` | `ADMIN_KEY` 불일치 |
-| 409 | `account_exists` | 이미 활성 계정이 있는 도메인 |
-| 429 | `too_many_attempts` | 이 IP의 관리자 키 실패 한도 초과 (5번, 이후 12초에 1번) |
-| 500 | `db_error` | DB 오류 |
+| 400 | `malformed_json_payload` | Malformed body JSON |
+| 400 | `invalid_allowfrom_cidr` | Malformed `allowfrom` entry |
+| 400 | `invalid_domain` | Malformed domain, wildcard |
+| 401 | `unauthorized` | `ADMIN_KEY` mismatch |
+| 409 | `account_exists` | The domain already has an active account |
+| 429 | `too_many_attempts` | Admin key failure limit for this IP exceeded (5, then 1 every 12 seconds) |
+| 500 | `db_error` | DB error |
 
-원본 acme-dns의 `/register`는 인증 없이 열려 있고 본문도 다릅니다. ssl-checker에서는 관리자 전용이며 `domain` 필드가 필수입니다.
+The original acme-dns `/register` is open without authentication and takes a different body. In ssl-checker it is administrator-only and the `domain` field is required.
 
 ## GET /health
 
-DB 연결과 DNS 공급자 상태를 확인합니다.
+Checks the DB connection and the DNS provider status.
 
 ```json
 {"db": "ok", "provider": "ok"}
 ```
 
-| 필드 | 값 |
+| Field | Values |
 | --- | --- |
 | `db` | `ok`, `error` |
-| `provider` | `ok`, `transient`(응답 지연·요청 제한), `config`(토큰·존 설정 오류) |
+| `provider` | `ok`, `transient` (slow response, rate limiting), `config` (token or zone misconfiguration) |
 
-둘 다 `ok`면 `200`, 아니면 `503`을 돌려줍니다. 공급자 확인은 외부 API를 부르므로 결과를 1분 동안 재사용하고, 한 번에 3초까지만 기다립니다.
+Returns `200` if both are `ok`, otherwise `503`. The provider check calls an external API, so the result is reused for 1 minute, and each check waits at most 3 seconds.
 
-## 조회 API (`/api`)
+## Read API (`/api`)
 
-인증서 점검 결과와 ACME 상태를 JSON으로 봅니다. 인증 없이 누구나 부를 수 있습니다. 시각은 RFC 3339 UTC입니다. 키와 키 해시는 어떤 응답에도 들어가지 않습니다.
+View certificate check results and ACME status as JSON. Anyone can call it without authentication. Times are RFC 3339 UTC. Keys and key hashes never appear in any response.
 
-| 요청 | 내용 |
+| Request | Content |
 | --- | --- |
-| `GET /api/summary` | 도메인 수와 상태별 개수, 마지막 점검 시각 |
-| `GET /api/domains` | 도메인 목록. `?status=critical`처럼 상태로 거를 수 있습니다 |
-| `GET /api/domains/{id}` | 대상별·접속 주소별 최신 점검 결과와 ACME 상태 |
-| `GET /api/targets/{id}/results?limit=50` | 대상의 점검 이력, 최신순. `limit` 최대 500 |
-| `GET /api/config` | `challenge_zone`, `check_interval`(Go 시간 문자열, 예: `"6h0m0s"`), `public_url` |
-| `GET /api/codes` | 판정 코드 표 `{"codes":[{"code","status","meaning"}]}`. 나쁜 상태부터 정렬됩니다. 화면과 `/llms.txt`가 같은 표를 씁니다 |
+| `GET /api/summary` | Number of domains, counts per status, time of the last check |
+| `GET /api/domains` | Domain list. Can be filtered by status, e.g. `?status=critical` |
+| `GET /api/domains/{id}` | Latest check results per target and per connection address, and the ACME status |
+| `GET /api/targets/{id}/results?limit=50` | Check history of a target, newest first. `limit` up to 500 |
+| `GET /api/config` | `challenge_zone`, `check_interval` (Go duration string, e.g. `"6h0m0s"`), `public_url` |
+| `GET /api/codes` | Table of verdict codes `{"codes":[{"code","status","meaning"}]}`. Sorted from the worst status. The UI and `/llms.txt` use the same table |
 
-인증서를 받지 못한 점검 결과(접속 실패 등)에는 `not_before`·`not_after` 필드가 없습니다.
+Check results that did not obtain a certificate (connection failure, etc.) have no `not_before` or `not_after` fields.
 
-상태는 `critical` > `warning` > `info` > `ok` > `unknown` 순으로 나쁩니다. 도메인 상태는 대상과 ACME 상태 중 가장 나쁜 것입니다.
+Statuses are ordered from worst to best as `critical` > `warning` > `info` > `ok` > `unknown`. A domain's status is the worst of its targets' and its ACME status.
 
-| 코드 | 상태 | 뜻 |
+| Code | Status | Meaning |
 | --- | --- | --- |
-| `CONNECT_FAILED` | critical | 접속이나 TLS 핸드셰이크 실패(10초). Go TLS 클라이언트가 거부하는 아주 오래된 서버(RSA 키 교환만 지원, 1024비트 미만 RSA 키, SHA-1 서명 등)도 `CONNECT_FAILED`로 나오므로 `error` 필드를 확인합니다. |
-| `CERT_EXPIRED` | critical | 인증서 만료 |
-| `CERT_EXPIRES_SOON` | critical | 만료까지 `min(7일, 수명의 1/3)` 미만. 90일짜리는 7일, 6일짜리 단기 인증서는 2일 |
-| `CHAIN_INVALID` | critical | 체인 검증 실패(자체 서명 포함) |
-| `HOSTNAME_MISMATCH` | critical | 인증서가 접속 이름을 덮지 않음 |
-| `RENEWAL_OVERDUE` | warning | 남은 기간이 수명의 1/3 미만. 정상이면 이미 갱신됐을 시점 |
-| `SERIAL_MISMATCH` | warning | 같은 대상의 서버들이 서로 다른 인증서를 냄(일부 배포 누락) |
-| `TLS_OUTDATED` | warning | TLS 1.2 미만으로 협상됨 |
-| `CNAME_MISSING` / `CNAME_MISMATCH` | warning | ACME를 켰는데 `_acme-challenge` CNAME이 없거나 다른 곳을 가리킴 |
-| `TXT_UPDATE_FAILING` | warning | `/update`가 3번 이상 연달아 실패 |
-| `WEAK_KEY` | info | RSA 2048비트 미만, ECDSA 256비트 미만 |
-| `NOT_CHECKED` | unknown | 아직 점검 결과가 없음 |
+| `CONNECT_FAILED` | critical | Connection or TLS handshake failed (10 seconds). Very old servers that the Go TLS client rejects (RSA key exchange only, RSA keys under 1024 bits, SHA-1 signatures, etc.) also show up as `CONNECT_FAILED`, so check the `error` field. |
+| `CERT_EXPIRED` | critical | Certificate expired |
+| `CERT_EXPIRES_SOON` | critical | Less than `min(7 days, 1/3 of lifetime)` until expiry. 7 days for a 90-day certificate, 2 days for a 6-day short-lived certificate |
+| `CHAIN_INVALID` | critical | Chain verification failed (including self-signed) |
+| `HOSTNAME_MISMATCH` | critical | The certificate does not cover the connection name |
+| `RENEWAL_OVERDUE` | warning | Remaining validity is less than 1/3 of the lifetime. Under normal operation it would already have been renewed |
+| `SERIAL_MISMATCH` | warning | Servers of the same target present different certificates (partially missed deployment) |
+| `TLS_OUTDATED` | warning | Negotiated below TLS 1.2 |
+| `CNAME_MISSING` / `CNAME_MISMATCH` | warning | ACME is enabled but the `_acme-challenge` CNAME is missing or points elsewhere |
+| `TXT_UPDATE_FAILING` | warning | `/update` failed 3 or more times in a row |
+| `WEAK_KEY` | info | RSA under 2048 bits, ECDSA under 256 bits |
+| `NOT_CHECKED` | unknown | No check result yet |
 
-오류는 `{"error":"<코드>"}`입니다: 400 `invalid_status`·`invalid_limit`, 404 `not_found`, 500 `db_error`.
+Errors are `{"error":"<code>"}`: 400 `invalid_status`, `invalid_limit`, 404 `not_found`, 500 `db_error`.
 
 ```bash
-curl -s '<앱>/api/domains?status=critical'
+curl -s '<app>/api/domains?status=critical'
 ```
 
-## 관리 API (`/api`, 관리자)
+## Admin API (`/api`, administrator)
 
-도메인·모니터링 대상을 관리하고 ACME를 켜고 끕니다. 관리자만 부를 수 있습니다.
+Manages domains and monitoring targets and turns ACME on and off. Administrators only.
 
-### 인증
+### Authentication
 
-| 방법 | 쓰는 곳 |
+| Method | Used by |
 | --- | --- |
-| `Authorization: Bearer <ADMIN_KEY>` | 스크립트, 에이전트 |
-| 세션 쿠키 `sslchk_session` (`POST /api/session`로 발급) | 대시보드 화면 |
+| `Authorization: Bearer <ADMIN_KEY>` | Scripts, agents |
+| Session cookie `sslchk_session` (issued by `POST /api/session`) | Dashboard UI |
 
-- 관리자가 아니면 401 `unauthorized`입니다. 틀린 키(로그인·Bearer)는 IP별로 5번까지 받고, 그 뒤로는 12초에 1번만 받습니다(429 `too_many_attempts`). 잠긴 IP는 틀린 키 시도와 Bearer 요청이 막히지만, 로그인으로 받은 쿠키는 그대로 통과합니다.
-- GET이 아닌 요청은 `Content-Type: application/json`이 있어야 합니다(본문이 없어도). 없으면 415 `unsupported_media_type`입니다. 모르는 필드가 있거나 본문이 64KiB를 넘으면 400 `malformed_json`입니다.
-- `allowfrom`은 최대 64개이고, 넘으면 400 `invalid_allowfrom`입니다.
-- 모든 쓰기는 감사 로그에 남습니다(`GET /api/audit`).
+- Non-administrators get 401 `unauthorized`. Wrong keys (login or Bearer) are accepted up to 5 times per IP, and after that only 1 every 12 seconds (429 `too_many_attempts`). A locked IP has wrong-key attempts and Bearer requests blocked, but a cookie obtained by logging in still passes.
+- Non-GET requests must have `Content-Type: application/json` (even without a body). Otherwise the response is 415 `unsupported_media_type`. Unknown fields or a body over 64KiB give 400 `malformed_json`.
+- `allowfrom` holds at most 64 entries; more gives 400 `invalid_allowfrom`.
+- Every write is recorded in the audit log (`GET /api/audit`).
 
-### 세션
+### Session
 
-| 요청 | 본문 | 응답 |
+| Request | Body | Response |
 | --- | --- | --- |
-| `POST /api/session` | `{"key":"<ADMIN_KEY>"}` | 200 `{"admin":true}` + 쿠키. 틀리면 401 |
-| `GET /api/session` | | `{"admin":true|false}` (세션 쿠키만 봅니다. Bearer 키는 보고하지 않습니다) |
-| `DELETE /api/session` | | 204, 쿠키 삭제 |
+| `POST /api/session` | `{"key":"<ADMIN_KEY>"}` | 200 `{"admin":true}` + cookie. 401 if wrong |
+| `GET /api/session` | | `{"admin":true\|false}` (looks only at the session cookie; a Bearer key is not reported) |
+| `DELETE /api/session` | | 204, cookie deleted |
 
-쿠키는 12시간 유효합니다. 서버에 세션을 저장하지 않으므로, **로그아웃해도 이미 복사된 쿠키는 만료까지 유효합니다.** 모든 세션을 끊으려면 `ADMIN_KEY`를 바꿉니다. 쿠키에는 `HttpOnly`, `SameSite=Strict`가 붙고, 공개 주소가 `http://`가 아니면 `Secure`도 붙습니다. 화면 로그인은 HTTPS(Caddy 뒤)에서 쓰는 것을 권장합니다.
+The cookie is valid for 12 hours. Sessions are not stored on the server, so **a cookie that has already been copied stays valid until it expires, even after logout.** To end all sessions, change `ADMIN_KEY`. The cookie gets `HttpOnly` and `SameSite=Strict`, and also `Secure` unless the public address is `http://`. Using the UI login over HTTPS (behind Caddy) is recommended.
 
-### 도메인과 대상
+### Domains and targets
 
-| 요청 | 본문 | 응답 |
+| Request | Body | Response |
 | --- | --- | --- |
-| `POST /api/domains` | `{"fqdn":"a.com","memo":""}` | 201 도메인 상세. 409 `domain_exists`, 400 `invalid_domain`·`invalid_memo` |
-| `PATCH /api/domains/{id}` | `{"memo":"..."}` | 200 도메인 상세 |
-| `DELETE /api/domains/{id}` | | 204. ACME가 켜져 있으면 먼저 끄고(챌린지 TXT 삭제) 대상·기록과 함께 지웁니다 |
-| `POST /api/domains/{id}/targets` | `{"hostname":"www.a.com","port":443,"sni":"","ips":["10.0.1.10"],"memo":""}` | 201 대상(바로 점검한 결과 포함). 409 `target_exists`, 400 `invalid_target` |
-| `PATCH /api/targets/{id}` | 위 필드 중 바꿀 것만 | 200 대상. hostname·port·sni·ips를 바꾸면 바로 다시 점검합니다 |
+| `POST /api/domains` | `{"fqdn":"a.com","memo":""}` | 201 domain detail. 409 `domain_exists`, 400 `invalid_domain`, `invalid_memo` |
+| `PATCH /api/domains/{id}` | `{"memo":"..."}` | 200 domain detail |
+| `DELETE /api/domains/{id}` | | 204. If ACME is on, it is turned off first (challenge TXT deleted), then the domain is deleted together with its targets and records |
+| `POST /api/domains/{id}/targets` | `{"hostname":"www.a.com","port":443,"sni":"","ips":["10.0.1.10"],"memo":""}` | 201 target (including the result of an immediate check). 409 `target_exists`, 400 `invalid_target` |
+| `PATCH /api/targets/{id}` | Only the fields above that you want to change | 200 target. Changing hostname, port, sni or ips triggers an immediate re-check |
 | `DELETE /api/targets/{id}` | | 204 |
-| `POST /api/targets/{id}/check` | | 200 `{"results":[...]}` 이번 점검 결과 |
+| `POST /api/targets/{id}/check` | | 200 `{"results":[...]}` results of this check |
 
-- `hostname`: 점검할 이름. 내부 이름(한 단어)이나 IP도 됩니다. 와일드카드는 안 됩니다.
-- `ips`: 서버별로 직접 접속할 IP 목록(최대 16개). 비우면 hostname으로 한 번 접속합니다.
-- `memo`: 최대 500자.
+- `hostname`: The name to check. Internal names (single label) and IPs are also allowed. Wildcards are not.
+- `ips`: List of IPs to connect to directly, one per server (up to 16). If empty, a single connection is made to the hostname.
+- `memo`: Up to 500 characters.
 
 ### ACME
 
-| 요청 | 본문 | 응답 |
+| Request | Body | Response |
 | --- | --- | --- |
-| `POST /api/domains/{id}/acme` | `{"allowfrom":["10.0.1.0/24"]}` | 201 **일회성 자격 증명**. 409 `acme_enabled`, 400 `invalid_allowfrom` |
-| `PATCH /api/domains/{id}/acme` | `{"allowfrom":[...]}` | 200 ACME 상태. 빈 목록이면 어디서든 `/update`를 부를 수 있습니다 |
-| `POST /api/domains/{id}/acme/rotate` | | 200 일회성 자격 증명. username·서브도메인은 그대로, 키만 바뀝니다. 옛 키는 바로 무효 |
-| `POST /api/domains/{id}/acme/check` | | 200 ACME 상태(CNAME을 지금 확인한 결과) |
-| `DELETE /api/domains/{id}/acme` | | 204. 계정 폐기, 챌린지 TXT 삭제. 다시 켜면 서브도메인이 바뀌어 CNAME을 다시 걸어야 합니다 |
+| `POST /api/domains/{id}/acme` | `{"allowfrom":["10.0.1.0/24"]}` | 201 **one-time credentials**. 409 `acme_enabled`, 400 `invalid_allowfrom` |
+| `PATCH /api/domains/{id}/acme` | `{"allowfrom":[...]}` | 200 ACME status. With an empty list, `/update` can be called from anywhere |
+| `POST /api/domains/{id}/acme/rotate` | | 200 one-time credentials. The username and subdomain stay the same; only the key changes. The old key is invalidated immediately |
+| `POST /api/domains/{id}/acme/check` | | 200 ACME status (result of checking the CNAME right now) |
+| `DELETE /api/domains/{id}/acme` | | 204. Account revoked, challenge TXT deleted. If you turn it on again, the subdomain changes and the CNAME must be set up again |
 
-ACME가 꺼진 도메인에 수정·재발급·확인·끄기를 부르면 409 `acme_disabled`입니다. 끄기나 도메인 삭제 중 DNS 공급자가 실패하면 아무것도 지우지 않고 500 `dns_provider_error`를 돌려줍니다.
+Calling update, rotate, check or disable on a domain with ACME turned off gives 409 `acme_disabled`. If the DNS provider fails while disabling ACME or deleting a domain, nothing is deleted and 500 `dns_provider_error` is returned.
 
-일회성 자격 증명 응답(`Cache-Control: no-store`). **비밀번호는 이 응답에만 나옵니다.**
+One-time credentials response (`Cache-Control: no-store`). **The password appears only in this response.**
 
 ```json
 {
-  "username": "<uuid>", "password": "<40자>", "subdomain": "<uuid>",
+  "username": "<uuid>", "password": "<40 characters>", "subdomain": "<uuid>",
   "fulldomain": "<uuid>.acme.example.com",
   "cname_record": "_acme-challenge.a.com. CNAME <uuid>.acme.example.com.",
   "allowfrom": ["10.0.1.0/24"],
@@ -210,53 +212,53 @@ ACME가 꺼진 도메인에 수정·재발급·확인·끄기를 부르면 409 `
 }
 ```
 
-`setup`은 스크립트 하나(`setup`)의 내려받기 주소, 실행 명령(`cmd`), 내용(`script`)과, 웹서버(`nginx`, `apache`, `caddy`)별 설정 예(`config`)입니다. 스크립트 하나가 acme.sh 설치 확인부터 웹서버 지정까지 모두 합니다. **스크립트에는 `password` 같은 비밀값이 없습니다.** 서버에서 실행할 때 `username`, `password`를 입력하거나 환경변수로 넘깁니다(`subdomain`은 `/acme/verify`가 알려 줍니다). 주소는 `PUBLIC_URL`(없으면 요청 주소) 기준입니다. 키 재발급(`rotate`) 응답은 `rotated: true`이고, 이미 인증서가 있어도 새 키가 도메인 설정에 저장되도록 서버에서 세팅 스크립트를 `FORCE=1`로 다시 실행해야 합니다(예: `FORCE=1 bash setup.sh`).
+`setup` contains the download URL, run command (`cmd`) and content (`script`) of the single script (`setup`), plus a configuration example (`config`) per web server (`nginx`, `apache`, `caddy`). The one script does everything from checking the acme.sh installation to configuring the web server. **The script contains no secrets such as the `password`.** When it runs on the server, you enter `username` and `password` or pass them as environment variables (the `subdomain` is supplied by `/acme/verify`). Addresses are based on `PUBLIC_URL` (or the request address if unset). The key rotation (`rotate`) response has `rotated: true`, and even if a certificate already exists you must re-run the setup script on the server with `FORCE=1` so that the new key is saved to the domain configuration (e.g. `FORCE=1 bash setup.sh`).
 
-### 설치·세팅 스크립트
+### Install and setup script
 
-- `GET /acme/setup.sh`: 스크립트 파일(`text/plain`). 로그인 없이 받을 수 있고 비밀값이 없습니다. `curl -fsSL <주소>/acme/setup.sh -o setup.sh && bash setup.sh` 한 줄로 설정이 진행됩니다. `curl ... | bash`도 되며, 이때 입력은 `/dev/tty`에서 받습니다.
-- `GET /api/setup`: 위 스크립트의 내용과 실행 명령, 웹서버 설정 예(JSON).
+- `GET /acme/setup.sh`: The script file (`text/plain`). It can be downloaded without logging in and contains no secrets. A single line, `curl -fsSL <address>/acme/setup.sh -o setup.sh && bash setup.sh`, runs the setup. `curl ... | bash` also works; in that case input is read from `/dev/tty`.
+- `GET /api/setup`: The content and run command of the script above, plus web server configuration examples (JSON).
 
-스크립트는 이 순서로 진행하고, 문제가 있으면 발급 전에 이유를 알려 주고 멈춥니다.
+The script proceeds in this order, and if something is wrong it explains why and stops before issuing.
 
-1. 자격 증명을 입력받아 `POST /acme/verify`로 **자격 증명과 이 서버의 IP가 허용 목록(`allowfrom`)에 있는지** 확인합니다.
-2. acme.sh가 3.1.4 이상인지 확인하고, 없거나 낮으면 설치합니다(만료 알림 메일 주소를 물어봅니다).
-3. 웹서버를 감지해 기본값으로 제안하고(`nginx`, `apache`, `caddy`), 실행 파일과 설정 디렉터리를 확인합니다. 감지되지 않거나 직접 reload하려면 `manual`을 골라 **reload 스크립트나 명령**(`RELOAD_CMD`)을 입력합니다. 경로로 준 스크립트는 실행할 수 있는지 확인합니다.
-4. 도메인을 입력받아(`*.`는 빼고 `a.com`처럼 입력하며, 와일드카드 `*.a.com`은 항상 함께 발급합니다. `*.a.com`을 입력해도 `a.com`으로 봅니다) `_acme-challenge.<도메인>`의 **CNAME이 `/acme/verify`가 돌려준 `fulldomain`을 가리키는지** 공개 DNS(`DNS_RESOLVER`, 기본 `1.1.1.1`)로 확인합니다(`dig`, `host`, `nslookup`, 없으면 DNS over HTTPS). 없거나 다르면 등록할 레코드를 보여 주고, 터미널이면 등록한 뒤 다시 확인하고 아니면 멈춥니다. `SKIP_CNAME_CHECK=1`로 건너뜁니다.
-5. 인증서 저장 경로(`CERT_DIR`, 기본 `/etc/ssl/<도메인>`)와 reload 명령을 정하고 발급해 설치합니다. 저장 디렉터리는 sudo 없이 만들거나 쓸 수 있으면 sudo를 쓰지 않습니다.
-6. 웹서버 설정이 이 인증서를 이미 쓰는지 확인하고, 아니면 넣을 설정을 출력합니다.
-7. reload 명령이 `sudo`를 쓰는데 이 계정이 sudo에 비밀번호가 필요하면 경고합니다. 자동 갱신(cron)은 비밀번호를 입력할 수 없어 reload가 실패하기 때문입니다.
+1. Prompts for the credentials and uses `POST /acme/verify` to check **the credentials and whether this server's IP is in the allow list (`allowfrom`)**.
+2. Checks that acme.sh is 3.1.4 or later, and installs it if it is missing or older (asks for an email address for expiry notices).
+3. Detects the web server and offers it as the default (`nginx`, `apache`, `caddy`), and checks its executable and configuration directory. If none is detected or you want to reload it yourself, choose `manual` and enter a **reload script or command** (`RELOAD_CMD`). A script given as a path is checked to be executable.
+4. Prompts for the domain (enter it without `*.`, like `a.com`; the wildcard `*.a.com` is always issued along with it, and entering `*.a.com` is treated as `a.com`) and checks via public DNS (`DNS_RESOLVER`, default `1.1.1.1`) that **the CNAME of `_acme-challenge.<domain>` points to the `fulldomain` returned by `/acme/verify`** (using `dig`, `host`, `nslookup`, or DNS over HTTPS if none are available). If it is missing or different, it shows the record to create; on a terminal it re-checks after you create it, otherwise it stops. Skip with `SKIP_CNAME_CHECK=1`.
+5. Decides the certificate directory (`CERT_DIR`, default `/etc/ssl/<domain>`) and the reload command, then issues and installs the certificate. If the directory can be created or written without sudo, sudo is not used.
+6. Checks whether the web server configuration already uses this certificate, and if not, prints the configuration to add.
+7. Warns if the reload command uses `sudo` and this account needs a password for sudo, because automatic renewal (cron) cannot enter a password, so the reload would fail.
 
-환경변수로 미리 넘기면 묻지 않습니다: `ACMEDNS_USERNAME`, `ACMEDNS_PASSWORD`, `ACMEDNS_SUBDOMAIN`, `SSLCHK_URL`, `ACME_EMAIL`, `WEB_SERVER`, `DOMAIN`, `CERT_DIR`, `CERT_GROUP`(Caddy), `RELOAD_CMD`. 웹서버 설정 위치는 `WEB_CONF_DIR`, 실행 파일을 더 찾아볼 위치는 `WEB_SEARCH_DIRS`로 정하고, 실행 파일 확인은 `SKIP_WEB_CHECK=1`로 건너뜁니다. root가 아닌 계정은 reload 기본 명령과 디렉터리 생성에 `sudo`를 쓰고, root는 쓰지 않습니다(`id -u`로 판단하며 `SUDO_CMD`로 바꿉니다. 비우면 sudo 없음). reload에 sudo가 필요한 서버는 root 셸(`sudo -i`)에서 실행하거나, reload 명령만 비밀번호 없이 허용(sudoers NOPASSWD)하세요.
+Values passed in advance as environment variables are not prompted for: `ACMEDNS_USERNAME`, `ACMEDNS_PASSWORD`, `ACMEDNS_SUBDOMAIN`, `SSLCHK_URL`, `ACME_EMAIL`, `WEB_SERVER`, `DOMAIN`, `CERT_DIR`, `CERT_GROUP` (Caddy), `RELOAD_CMD`. The web server configuration location is set with `WEB_CONF_DIR`, additional places to look for the executable with `WEB_SEARCH_DIRS`, and the executable check is skipped with `SKIP_WEB_CHECK=1`. Non-root accounts use `sudo` for the default reload command and for creating directories; root does not (decided by `id -u`, overridable with `SUDO_CMD`; empty means no sudo). On servers where reload needs sudo, run the script from a root shell (`sudo -i`), or allow only the reload command without a password (sudoers NOPASSWD).
 
 ## POST /acme/verify
 
-세팅 전에 쓰는 사전 점검입니다. `/acme/update`와 같은 인증과 허용 IP 검사를 하지만 TXT는 건드리지 않습니다.
+A pre-flight check used before setup. It performs the same authentication and allowed-IP check as `/acme/update` but does not touch the TXT.
 
-| 응답 | 뜻 |
+| Response | Meaning |
 | --- | --- |
-| 200 `{"ok":true,"source_ip":"<호출한 IP>","subdomain":"...","fulldomain":"..."}` | 자격 증명이 맞고 허용 IP입니다. `subdomain`은 acme.sh의 `ACMEDNS_SUBDOMAIN`이고, `fulldomain`은 도메인의 `_acme-challenge` CNAME이 가리켜야 할 주소입니다 |
-| 401 `forbidden` | username이나 password가 틀렸습니다 |
-| 403 `ip_not_allowed` + `source_ip` | 자격 증명은 맞지만 이 IP가 허용 목록에 없습니다 |
-| 429 `too_many_attempts` | 이 IP의 인증 실패가 너무 많습니다 |
+| 200 `{"ok":true,"source_ip":"<caller IP>","subdomain":"...","fulldomain":"..."}` | The credentials are correct and the IP is allowed. `subdomain` is acme.sh's `ACMEDNS_SUBDOMAIN`, and `fulldomain` is the address the domain's `_acme-challenge` CNAME must point to |
+| 401 `forbidden` | The username or password is wrong |
+| 403 `ip_not_allowed` + `source_ip` | The credentials are correct but this IP is not in the allow list |
+| 429 `too_many_attempts` | Too many authentication failures from this IP |
 
-거부는 `/acme/update`와 같은 IP별 실패 횟수를 씁니다. 감사 로그에는 `verify_denied`로 남습니다.
+Rejections use the same per-IP failure counter as `/acme/update`. They are recorded in the audit log as `verify_denied`.
 
-### 감사 로그
+### Audit log
 
-`GET /api/audit?limit=100&before_id=<id>` (관리자, 최대 500) → `{"entries":[{"id","at","actor","action","target","source_ip","detail"}]}` 최신순. 다음 페이지는 마지막 항목의 `id`를 `before_id`로 넘깁니다. `before_id`가 숫자가 아니면 400 `invalid_before_id`입니다.
+`GET /api/audit?limit=100&before_id=<id>` (administrator, up to 500) → `{"entries":[{"id","at","actor","action","target","source_ip","detail"}]}`, newest first. For the next page, pass the `id` of the last entry as `before_id`. If `before_id` is not a number, the response is 400 `invalid_before_id`.
 
 ```bash
 read -rs ADMIN_KEY
-curl -s -X POST '<앱>/api/domains' -H "Authorization: Bearer $ADMIN_KEY" -H 'Content-Type: application/json' \
+curl -s -X POST '<app>/api/domains' -H "Authorization: Bearer $ADMIN_KEY" -H 'Content-Type: application/json' \
   -d '{"fqdn":"a.com"}'
 ```
 
-## 화면과 `/llms.txt`
+## UI and `/llms.txt`
 
-| 요청 | 내용 |
+| Request | Content |
 | --- | --- |
-| `GET /`, `/domains/<id>`, `/audit` | 대시보드(SPA). 화면을 빌드하지 않은 바이너리는 503과 안내 페이지를 돌려줍니다 |
-| `GET /llms.txt` | 에이전트가 ACME를 구성할 때 따라 할 절차(`text/plain`). 서버 주소와 `CHALLENGE_ZONE`이 채워져 있고 인증이 필요 없습니다 |
+| `GET /`, `/domains/<id>`, `/audit` | Dashboard (SPA). A binary built without the UI returns 503 and a notice page |
+| `GET /llms.txt` | Procedure for an agent to follow when configuring ACME (`text/plain`). The server address and `CHALLENGE_ZONE` are filled in, and no authentication is required |
 
-화면은 `/api/`, `/update`, `/register`, `/health`, `/llms.txt`를 가로채지 않습니다. 사용법은 [대시보드](dashboard.md)에 있습니다.
+The UI does not intercept `/api/`, `/update`, `/register`, `/health` or `/llms.txt`. Usage is described in [Dashboard](dashboard.md).

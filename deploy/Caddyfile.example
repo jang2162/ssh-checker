@@ -1,15 +1,16 @@
-# 인증서를 받는 서버가 쓰는 API와 스크립트는 모두 /acme/ 아래에 있어서 규칙은 한 줄이다.
-#   /acme/*  update, verify(API)와 setup.sh(스크립트)
-#   그 밖에(대시보드, /api/*, 관리자 로그인, 옛 /update, /register)는 내부망만
-# 위에서부터 먼저 맞는 handle 하나만 실행된다.
+# Everything a server that receives certificates uses (API and scripts) lives under /acme/, so one rule opens it.
+#   /acme/*  update, verify (API) and setup.sh (script)
+#   everything else (dashboard, /api/*, admin login, the legacy /update, /register) stays internal
+# Only the first matching handle runs, from the top.
 ssl-checker.example.com {
-	# 인증서를 받는 서버가 바깥에 있으면 연다. 내부 서버만 쓰면 이 블록을 지운다.
+	# Open this when the servers that receive certificates are outside your network.
+	# Delete the block if only internal servers use it.
 	@acme path /acme/*
 	handle @acme {
 		reverse_proxy ssl-checker-api:8080
 	}
 
-	# (선택) 대시보드 조회를 바깥에도 보여 주려면 연다. 읽기 전용 경로만이다.
+	# (Optional) Show the dashboard to the outside as well. Read-only paths only.
 	# @public_read {
 	# 	method GET HEAD
 	# 	path / /assets/* /api/summary /api/domains /api/config /api/codes /api/session
@@ -17,10 +18,11 @@ ssl-checker.example.com {
 	# handle @public_read {
 	# 	reverse_proxy ssl-checker-api:8080
 	# }
-	# 도메인 상세(/domains/<id>, /api/domains/<id>, /api/targets/<id>/results)에는
-	# 대상 IP, 허용 IP, 계정 username이 들어 있어 위 목록에서 뺐다. 보여 줄 때만 따로 연다.
+	# Domain details (/domains/<id>, /api/domains/<id>, /api/targets/<id>/results) contain target IPs,
+	# allowed IPs and the account username, so they are left out of the list above. Open them separately
+	# only if you want to show them.
 
-	# 나머지(관리자 로그인, 쓰기, 감사 로그, 옛 /update 등)는 내부망만.
+	# The rest (admin login, writes, audit log, the legacy /update, ...) is internal only.
 	@internal remote_ip 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16
 	handle @internal {
 		reverse_proxy ssl-checker-api:8080

@@ -16,6 +16,7 @@ import (
 	"ssl-checker/internal/cnamecheck"
 	"ssl-checker/internal/dnsprovider"
 	"ssl-checker/internal/httpx"
+	"ssl-checker/internal/lang"
 	"ssl-checker/internal/monitor"
 	"ssl-checker/internal/store"
 )
@@ -37,6 +38,7 @@ type API struct {
 	Svc           *acmedns.Service    // ACME 켜기·재발급·끄기
 	Runner        *monitor.Runner     // "지금 점검"과 대상 추가·수정 직후 점검
 	CNAME         *cnamecheck.Checker // ACME CNAME "지금 확인"
+	Lang          lang.Lang           // UI_LANGUAGE. 스크립트, 판정 코드 설명, 안내 문구의 언어
 }
 
 type route struct {
@@ -292,7 +294,7 @@ func (a *API) config(w http.ResponseWriter, r *http.Request) {
 
 // codes는 판정 코드 표다. 화면과 llms.txt가 같은 설명을 쓰도록 한 곳에서 낸다.
 func (a *API) codes(w http.ResponseWriter, r *http.Request) {
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"codes": monitor.Codes()})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"codes": monitor.Codes(a.Lang)})
 }
 
 // hostRE는 이름[:포트] 또는 [IPv6][:포트]다. 공개 주소는 자격 증명 안내에 들어가므로 경로·사용자 정보·공백이 섞인 값은 받지 않는다.

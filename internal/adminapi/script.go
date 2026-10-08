@@ -3,9 +3,11 @@ package adminapi
 import (
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"ssl-checker/internal/httpx"
+	"ssl-checker/internal/lang"
 )
 
 // webServer는 인증서를 받을 서버에서 쓰는 웹서버별 차이다. 스크립트가 이 표로 웹서버를 감지하고 설치 위치를 확인한다.
@@ -55,12 +57,12 @@ var webServers = []webServer{
 // 비밀번호는 화면에 보이지 않게 받고, 파일이나 셸 기록에 남지 않는다.
 const askFunc = `die() { echo "$*" >&2; exit 1; }
 
-# 입력을 받을 터미널을 출력한다. 없으면 실패한다. curl ... | bash처럼 표준입력이 파이프여도 /dev/tty로 받는다.
+@@c_tty@@
 tty_in() {
   if [ -t 0 ]; then echo /dev/stdin; elif { : </dev/tty; } 2>/dev/null; then echo /dev/tty; else return 1; fi
 }
 
-# ask 변수이름 "설명" [기본값] [secret]
+@@c_ask@@
 ask() {
   local var=$1 label=$2 def=${3:-} secret=${4:-} val="" in=""
   if [ -n "${!var:-}" ]; then return; fi
@@ -72,9 +74,9 @@ ask() {
       read -rp "$label${def:+ [$def]}: " val <"$in"
     fi
   fi
-  # 터미널이 없으면(에이전트, 자동화) 기본값을 쓴다. 기본값이 없는 값은 환경변수로 넘겨야 한다.
+  @@c_default@@
   val=${val:-$def}
-  [ -n "$val" ] || die "$var 값이 필요합니다. 터미널에서 실행하거나 환경변수로 넘기세요."
+  [ -n "$val" ] || die "@@e_value@@"
   printf -v "$var" '%s' "$val"
   export "$var"
 }
@@ -110,21 +112,21 @@ const verifyFunc = `verify_server() {
   tmp=$(mktemp)
   code=$(printf 'header = "X-Api-User: %s"\nheader = "X-Api-Key: %s"\n' "$ACMEDNS_USERNAME" "$ACMEDNS_PASSWORD" |
     curl -sS -K - -o "$tmp" -w '%{http_code}' -X POST "$ACMEDNS_BASE_URL/verify") ||
-    { rm -f "$tmp"; die "ssl-checker($ACMEDNS_BASE_URL)에 연결하지 못했습니다. 주소와 네트워크를 확인하세요."; }
+    { rm -f "$tmp"; die "@@e_connect@@"; }
   ip=$(sed -n 's/.*"source_ip":"\([^"]*\)".*/\1/p' "$tmp")
   FULLDOMAIN=$(sed -n 's/.*"fulldomain":"\([^"]*\)".*/\1/p' "$tmp")
   sub=$(sed -n 's/.*"subdomain":"\([^"]*\)".*/\1/p' "$tmp")
   rm -f "$tmp"
   case "$code" in
     200)
-      # subdomain은 계정에 묶여 있어 서버가 알려 준다. acme.sh(dns_acmedns)가 쓰는 값이라 입력받지 않는다.
+      @@c_subdomain@@
       [ -z "$sub" ] || { ACMEDNS_SUBDOMAIN=$sub; export ACMEDNS_SUBDOMAIN; }
-      [ -n "${ACMEDNS_SUBDOMAIN:-}" ] || die "서버가 subdomain을 알려 주지 않았습니다. ACMEDNS_SUBDOMAIN으로 직접 넘기세요."
-      echo "확인됨: 자격 증명이 맞고, 이 서버의 IP(${ip:-알 수 없음})가 허용 목록에 있습니다." ;;
-    401) die "username 또는 password가 맞지 않습니다." ;;
-    403) die "이 서버의 IP(${ip:-알 수 없음})가 허용 IP 목록에 없습니다. 관리자에게 이 IP를 허용 목록에 추가해 달라고 요청하세요." ;;
-    429) die "인증 실패가 너무 많아 잠시 차단됐습니다. 잠시 후 다시 시도하세요." ;;
-    *) die "자격 증명 확인에 실패했습니다(HTTP $code)." ;;
+      [ -n "${ACMEDNS_SUBDOMAIN:-}" ] || die "@@e_subdomain@@"
+      echo "@@i_verified@@" ;;
+    401) die "@@e_cred@@" ;;
+    403) die "@@e_ip@@" ;;
+    429) die "@@e_blocked@@" ;;
+    *) die "@@e_verify@@" ;;
   esac
 }
 `
@@ -150,19 +152,19 @@ const cnameFuncs = `lookup_cname() {
   out=$(printf '%s' "$out" | tr 'A-Z' 'a-z'); echo "${out%.}"
 }
 
-# check_cname 도메인 — CNAME이 맞을 때까지 확인한다. 터미널이면 등록한 뒤 다시 확인할 수 있고, 아니면 멈춘다.
+@@c_check_cname@@
 check_cname() {
   local name="_acme-challenge.$1" want got in ans
   want=$(printf '%s' "$FULLDOMAIN" | tr 'A-Z' 'a-z'); want=${want%.}
-  [ -n "$want" ] || { echo "알림: 서버가 챌린지 주소를 알려 주지 않아 CNAME 확인을 건너뜁니다."; return 0; }
+  [ -n "$want" ] || { echo "@@n_cname_skip@@"; return 0; }
   while :; do
     got=$(lookup_cname "$name")
-    if [ "$got" = "$want" ]; then echo "확인됨: $name CNAME → $want"; return 0; fi
-    if [ -z "$got" ]; then echo "CNAME이 없습니다: $name" >&2; else echo "CNAME이 다른 곳을 가리킵니다: $name → $got" >&2; fi
-    echo "  DNS에 등록하세요: $name.  CNAME  $want." >&2
-    if [ -n "${SKIP_CNAME_CHECK:-}" ]; then echo "SKIP_CNAME_CHECK가 설정되어 확인을 건너뜁니다. 발급은 CNAME이 전파되어야 성공합니다." >&2; return 0; fi
-    in=$(tty_in) || die "등록한 뒤 다시 실행하세요 (DNS 전파에 몇 분 걸릴 수 있습니다. 확인을 건너뛰려면 SKIP_CNAME_CHECK=1)."
-    read -rp "등록했으면 Enter로 다시 확인합니다 (s 입력 시 건너뜀): " ans <"$in"
+    if [ "$got" = "$want" ]; then echo "@@i_cname_ok@@"; return 0; fi
+    if [ -z "$got" ]; then echo "@@e_cname_none@@" >&2; else echo "@@e_cname_wrong@@" >&2; fi
+    echo "@@i_cname_register@@" >&2
+    if [ -n "${SKIP_CNAME_CHECK:-}" ]; then echo "@@n_cname_skipped@@" >&2; return 0; fi
+    in=$(tty_in) || die "@@e_cname_rerun@@"
+    read -rp "@@p_cname_retry@@" ans <"$in"
     [ "$ans" = s ] && return 0
   done
 }
@@ -171,125 +173,142 @@ check_cname() {
 // setupScript는 인증서를 받을 서버에서 내려받아 실행하는 스크립트 하나다. 자격 증명·허용 IP 확인, acme.sh 설치 확인(없으면 설치),
 // 웹서버 감지와 설치 위치 확인, 발급·설치, 웹서버 설정 반영 확인까지 한다(acme.sh 3.1.4 이상).
 // 자격 증명은 스크립트에 넣지 않고 실행할 때 입력받는다. baseURL은 내려받은 주소라서 기본값으로만 쓴다.
-func setupScript(baseURL string) string {
+func setupScript(baseURL string, l lang.Lang) string { return expand(setupScriptTokens(baseURL), l) }
+
+// setupScriptTokens는 @@키@@가 남아 있는 스크립트 본문이다. 글은 언어별 표(scriptMessages)에서 채운다.
+func setupScriptTokens(baseURL string) string {
 	var b strings.Builder
-	b.WriteString("#!/usr/bin/env bash\n# 인증서 발급·설치. 실행하면 값을 물어본다.\n")
-	b.WriteString("# 환경변수로 미리 넘기면 묻지 않는다. 키를 재발급한 뒤에는 FORCE=1로 실행한다.\n")
+	b.WriteString("#!/usr/bin/env bash\n@@c_header1@@\n")
+	b.WriteString("@@c_header2@@\n")
 	b.WriteString("set -eu\n\n" + askFunc + "\n" + findBinFunc + "\n" + acmeFuncs + "\n" + verifyFunc + "\n" + cnameFuncs + "\n")
-	b.WriteString("command -v curl >/dev/null || die \"curl이 필요합니다. 먼저 설치하세요.\"\n\n")
-	b.WriteString("ask SSLCHK_URL \"ssl-checker 주소\"")
+	b.WriteString("command -v curl >/dev/null || die \"@@e_curl@@\"\n\n")
+	b.WriteString("ask SSLCHK_URL \"@@p_url@@\"")
 	if baseURL != "" {
 		fmt.Fprintf(&b, " %q", baseURL)
 	}
 	b.WriteString("\nSSLCHK_URL=${SSLCHK_URL%/}\n")
-	b.WriteString("# acme.sh의 dns_acmedns가 부르는 주소. 인증서를 받는 서버용 API와 스크립트는 /acme/ 아래에 있다.\n")
+	b.WriteString("@@c_baseurl@@\n")
 	b.WriteString("ACMEDNS_BASE_URL=\"${ACMEDNS_BASE_URL:-$SSLCHK_URL/acme}\"; export ACMEDNS_BASE_URL\n")
 	// root이면 sudo가 필요 없다(설치되어 있지 않을 수도 있다). 일반 계정이면 sudo를 쓴다. 환경변수 SUDO_CMD로 바꿀 수 있다.
 	b.WriteString("\nif [ -z \"${SUDO_CMD+x}\" ]; then if [ \"$(id -u)\" = 0 ]; then SUDO_CMD=\"\"; else SUDO_CMD=sudo; fi; fi\n")
-	b.WriteString("\n# 1) 자격 증명을 입력받고, 이 서버의 IP가 허용 목록에 있는지 확인한다. 통과해야 아래에서 설치한다.\n")
+	b.WriteString("\n@@c_step1@@\n")
 	b.WriteString("ask ACMEDNS_USERNAME \"username\"\n")
-	b.WriteString("ask ACMEDNS_PASSWORD \"password (입력은 보이지 않습니다)\" \"\" secret\n")
+	b.WriteString("ask ACMEDNS_PASSWORD \"@@p_password@@\" \"\" secret\n")
 	b.WriteString("verify_server\n\n")
-	b.WriteString("# 2) acme.sh가 3.1.4 이상으로 설치되어 있는지 확인하고, 없거나 낮으면 설치한다.\n")
+	b.WriteString("@@c_step2@@\n")
 	b.WriteString("if acme_ok; then\n")
-	b.WriteString("  echo \"확인됨: acme.sh $(acme_version)\"\n")
+	b.WriteString("  echo \"@@i_acme_ok@@\"\n")
 	b.WriteString("else\n")
-	b.WriteString("  if [ -x \"$ACME_SH\" ]; then echo \"acme.sh가 3.1.4보다 낮습니다. 업그레이드합니다.\"; else echo \"acme.sh가 없습니다. 설치합니다.\"; fi\n")
-	b.WriteString("  ask ACME_EMAIL \"인증서 만료 알림을 받을 메일 주소\"\n")
-	b.WriteString("  # cron이 있어야 자동 갱신이 등록된다.\n")
+	b.WriteString("  if [ -x \"$ACME_SH\" ]; then echo \"@@n_acme_old@@\"; else echo \"@@n_acme_missing@@\"; fi\n")
+	b.WriteString("  ask ACME_EMAIL \"@@p_email@@\"\n")
+	b.WriteString("  @@c_cron@@\n")
 	b.WriteString("  curl -fsSL https://get.acme.sh | sh -s email=\"$ACME_EMAIL\"\n")
-	b.WriteString("  acme_ok || die \"설치 뒤에도 acme.sh 3.1.4 이상을 확인하지 못했습니다.\"\n")
-	b.WriteString("  echo \"acme.sh $(acme_version) 설치 완료\"\n")
+	b.WriteString("  acme_ok || die \"@@e_acme_after@@\"\n")
+	b.WriteString("  echo \"@@i_acme_done@@\"\n")
 	b.WriteString("fi\n\n")
-	b.WriteString("# 3) 웹서버를 정하고, 설치 위치를 확인한다. 설치된 웹서버를 찾아 기본값으로 제안한다.\n")
+	b.WriteString("@@c_step3@@\n")
 	b.WriteString("DETECTED=\"\"\n") // set -u에서 감지된 것이 없을 때도 안전하도록 먼저 비워 둔다
-	ids := make([]string, 0, len(webServers))
 	for _, ws := range webServers {
-		ids = append(ids, ws.ID)
 		fmt.Fprintf(&b, "if find_bin %s >/dev/null; then DETECTED=\"$DETECTED %s\"; fi\n", strings.Join(ws.Bins, " "), ws.ID)
 	}
 	b.WriteString("DETECTED=${DETECTED# }\n")
-	b.WriteString("if [ -n \"$DETECTED\" ]; then echo \"감지된 웹서버: $DETECTED\"; else echo \"감지된 웹서버가 없습니다. 수동 설정(manual)으로 진행합니다: reload 스크립트를 직접 입력하세요.\"; fi\n")
+	b.WriteString("if [ -n \"$DETECTED\" ]; then echo \"@@i_detected@@\"; else echo \"@@n_detected_none@@\"; fi\n")
 	b.WriteString("WEB_DEFAULT=${DETECTED%% *}\n")
-	fmt.Fprintf(&b, "ask WEB_SERVER \"웹서버 (%s, manual=수동)\" \"${WEB_DEFAULT:-manual}\"\n", strings.Join(ids, ", "))
+	b.WriteString("ask WEB_SERVER \"@@p_web@@\" \"${WEB_DEFAULT:-manual}\"\n")
 	b.WriteString("case \"$WEB_SERVER\" in\n")
 	for _, ws := range webServers {
 		fmt.Fprintf(&b, "  %s) WEB_BINS=\"%s\"; WEB_CONF_DIRS=\"%s\" ;;\n", ws.ID, strings.Join(ws.Bins, " "), strings.Join(ws.ConfDirs, " "))
 	}
 	// 수동 설정: 웹서버를 확인하지 않고 reload 스크립트를 직접 받는다.
 	b.WriteString("  manual) WEB_BINS=\"\"; WEB_CONF_DIRS=\"\"; SKIP_WEB_CHECK=1 ;;\n")
-	fmt.Fprintf(&b, "  *) die \"WEB_SERVER는 %s, manual 중 하나여야 합니다.\" ;;\nesac\n", strings.Join(ids, ", "))
-	b.WriteString("# 실행 파일이 없으면 reload가 실패하므로 발급 전에 멈춘다. 건너뛰려면 SKIP_WEB_CHECK=1.\n")
+	b.WriteString("  *) die \"@@e_web_invalid@@\" ;;\nesac\n")
+	b.WriteString("@@c_webcheck@@\n")
 	b.WriteString("if [ -z \"${SKIP_WEB_CHECK:-}\" ]; then\n")
-	b.WriteString("  WEB_BIN=$(find_bin $WEB_BINS) || die \"$WEB_SERVER 실행 파일을 찾지 못했습니다. 설치되어 있는지, 다른 웹서버를 쓰거나 직접 reload하려면 WEB_SERVER=manual로 실행하세요 (확인만 건너뛰려면 SKIP_WEB_CHECK=1).\"\n")
-	b.WriteString("  echo \"확인됨: $WEB_SERVER 실행 파일 $WEB_BIN\"\n")
+	b.WriteString("  WEB_BIN=$(find_bin $WEB_BINS) || die \"@@e_web_missing@@\"\n")
+	b.WriteString("  echo \"@@i_web_bin@@\"\n")
 	b.WriteString("fi\n")
 	b.WriteString("WEB_CONF=\"\"\n")
 	b.WriteString("for d in ${WEB_CONF_DIR:-$WEB_CONF_DIRS}; do if [ -d \"$d\" ]; then WEB_CONF=$d; break; fi; done\n")
-	b.WriteString("if [ -n \"$WEB_CONF\" ]; then echo \"확인됨: $WEB_SERVER 설정 디렉터리 $WEB_CONF\"; else echo \"알림: $WEB_SERVER 설정 디렉터리를 찾지 못했습니다. 설정 반영 확인은 건너뜁니다 (위치를 알면 WEB_CONF_DIR로 넘기세요).\"; fi\n\n")
-	b.WriteString("# 4) 인증서를 저장할 도메인과 경로를 정한다.\n")
-	b.WriteString("ask DOMAIN \"인증서를 받을 도메인 (예: example.com, *.example.com도 함께 발급)\"\n")
+	b.WriteString("if [ -n \"$WEB_CONF\" ]; then echo \"@@i_web_conf@@\"; else echo \"@@n_web_conf_none@@\"; fi\n\n")
+	b.WriteString("@@c_step4@@\n")
+	b.WriteString("ask DOMAIN \"@@p_domain@@\"\n")
 	// 와일드카드는 항상 함께 발급한다. *.example.com을 입력했다면 example.com으로 본다(그대로 쓰면 **.example.com이 된다).
-	b.WriteString("if [ \"${DOMAIN#\\*.}\" != \"$DOMAIN\" ]; then DOMAIN=${DOMAIN#\\*.}; echo \"알림: *.는 빼고 $DOMAIN으로 진행합니다. 와일드카드(*.$DOMAIN)는 함께 발급됩니다.\"; fi\n")
-	b.WriteString("# 도메인의 _acme-challenge CNAME이 ssl-checker가 알려 준 주소를 가리키는지 확인한다. 없으면 발급이 실패하므로 미리 알려 준다.\n")
+	b.WriteString("if [ \"${DOMAIN#\\*.}\" != \"$DOMAIN\" ]; then DOMAIN=${DOMAIN#\\*.}; echo \"@@n_wildcard@@\"; fi\n")
+	b.WriteString("@@c_cname@@\n")
 	b.WriteString("check_cname \"$DOMAIN\"\n")
-	b.WriteString("ask CERT_DIR \"인증서를 저장할 디렉터리\" \"/etc/ssl/$DOMAIN\"\n")
+	b.WriteString("ask CERT_DIR \"@@p_certdir@@\" \"/etc/ssl/$DOMAIN\"\n")
 	// 웹서버마다 다른 값: 키 파일 그룹(caddy)과 reload 기본 명령. 변수를 다 받은 뒤에 풀어서 기본값으로 쓴다.
 	b.WriteString("case \"$WEB_SERVER\" in\n")
 	for _, ws := range webServers {
 		fmt.Fprintf(&b, "  %s)\n", ws.ID)
 		if ws.Group {
-			b.WriteString("    ask CERT_GROUP \"키 파일을 읽을 그룹\" \"caddy\"\n")
+			b.WriteString("    ask CERT_GROUP \"@@p_group@@\" \"caddy\"\n")
 		}
 		fmt.Fprintf(&b, "    RELOAD_DEFAULT=\"%s\" ;;\n", ws.ReloadDefault)
 	}
-	b.WriteString("  manual)\n    echo \"수동 설정: 인증서를 설치한 뒤 웹서버를 다시 읽게 하는 reload 스크립트나 명령을 입력하세요. 예: /usr/local/bin/reload-web.sh, systemctl reload haproxy\"\n    RELOAD_DEFAULT=\"\" ;;\n")
+	b.WriteString("  manual)\n    echo \"@@n_manual@@\"\n    RELOAD_DEFAULT=\"\" ;;\n")
 	b.WriteString("esac\n")
-	b.WriteString("ask RELOAD_CMD \"설치 뒤 실행할 reload 스크립트 또는 명령\" \"$RELOAD_DEFAULT\"\n")
+	b.WriteString("ask RELOAD_CMD \"@@p_reload@@\" \"$RELOAD_DEFAULT\"\n")
 	// 스크립트 경로(/로 시작)를 넘겼다면 지금 실행할 수 있는지 확인한다. sudo는 건너뛰고 본다.
 	b.WriteString("RELOAD_BIN=${RELOAD_CMD#sudo }; RELOAD_BIN=${RELOAD_BIN%% *}\n")
-	b.WriteString("case \"$RELOAD_BIN\" in /*|./*) [ -x \"$RELOAD_BIN\" ] || die \"reload 스크립트를 실행할 수 없습니다: $RELOAD_BIN (파일이 있는지, 실행 권한이 있는지 확인하세요)\" ;; esac\n\n")
-	b.WriteString("# 5) 인증서를 발급해 설치한다.\n")
+	b.WriteString("case \"$RELOAD_BIN\" in /*|./*) [ -x \"$RELOAD_BIN\" ] || die \"@@e_reload@@\" ;; esac\n\n")
+	b.WriteString("@@c_step5@@\n")
 	b.WriteString("\"$ACME_SH\" --set-default-ca --server letsencrypt\n")
-	b.WriteString("# 처음 연결하는 도메인은 --issue에 --staging을 붙여 먼저 확인한다(docs 참고).\n")
-	b.WriteString("# FORCE=1이면 이미 인증서가 있어도 다시 발급해, 새 키를 도메인 설정에 저장한다.\n")
+	b.WriteString("@@c_staging@@\n")
+	b.WriteString("@@c_force@@\n")
 	// 종료 코드 2는 "아직 갱신할 때가 아님"이다. 스크립트를 다시 돌려도 멈추지 않게 한다.
 	b.WriteString(`"$ACME_SH" --issue --keylength ec-256 --dns dns_acmedns -d "$DOMAIN" -d "*.$DOMAIN" ${FORCE:+--force} || [ "$?" -eq 2 ]` + "\n")
 	// 저장 디렉터리는 sudo 없이 만들거나 쓸 수 있으면 그대로 쓴다. 안 될 때만 sudo로 만들고 소유자를 현재 계정으로 맞춘다
 	// (자동 갱신이 같은 계정으로 파일을 쓰기 때문이다).
 	b.WriteString("if ! { mkdir -p \"$CERT_DIR\" 2>/dev/null && [ -w \"$CERT_DIR\" ]; }; then\n")
-	b.WriteString("  echo \"인증서 저장 디렉터리($CERT_DIR)를 만들려면 sudo가 필요합니다. 비밀번호를 물으면 입력하세요.\"\n")
+	b.WriteString("  echo \"@@n_sudo_dir@@\"\n")
 	b.WriteString("  ${SUDO_CMD:+$SUDO_CMD }install -d -o \"$(id -un)\" \"$CERT_DIR\"\n")
 	b.WriteString("fi\n")
 	b.WriteString("\"$ACME_SH\" --install-cert -d \"$DOMAIN\" --ecc \\\n")
 	b.WriteString("  --key-file \"$CERT_DIR/key.pem\" \\\n")
 	b.WriteString("  --fullchain-file \"$CERT_DIR/fullchain.pem\" \\\n")
 	b.WriteString("  --reloadcmd \"$RELOAD_CMD\"\n\n")
-	b.WriteString("# 6) 웹서버 설정이 이 인증서를 쓰는지 확인하고, 아니면 넣을 설정을 보여 준다.\n")
-	b.WriteString("echo \"인증서를 저장했습니다: $CERT_DIR/fullchain.pem, $CERT_DIR/key.pem\"\n")
+	b.WriteString("@@c_step6@@\n")
+	b.WriteString("echo \"@@i_saved@@\"\n")
 	b.WriteString("if [ -n \"$WEB_CONF\" ] && { grep -rqsF -- \"$CERT_DIR/fullchain.pem\" \"$WEB_CONF\" 2>/dev/null || { [ -n \"$SUDO_CMD\" ] && $SUDO_CMD -n grep -rqsF -- \"$CERT_DIR/fullchain.pem\" \"$WEB_CONF\" 2>/dev/null; }; }; then\n")
-	b.WriteString("  echo \"확인됨: $WEB_SERVER 설정이 이미 이 인증서를 쓰고 있습니다.\"\n")
+	b.WriteString("  echo \"@@i_web_uses@@\"\n")
 	b.WriteString("else\n")
-	b.WriteString("  echo \"$WEB_SERVER 설정에 아래를 넣고 reload하세요:\"\n")
+	b.WriteString("  echo \"@@i_web_add@@\"\n")
 	b.WriteString("  case \"$WEB_SERVER\" in\n")
 	for _, ws := range webServers {
 		fmt.Fprintf(&b, "    %s)\n      cat <<EOF_CONFIG\n%sEOF_CONFIG\n      ;;\n", ws.ID, fmt.Sprintf(ws.Config, "$CERT_DIR"))
 	}
-	b.WriteString("    manual)\n      echo \"  인증서(체인 포함): $CERT_DIR/fullchain.pem\"\n      echo \"  개인 키:          $CERT_DIR/key.pem\"\n      ;;\n")
+	b.WriteString("    manual)\n      echo \"@@i_manual_cert@@\"\n      echo \"@@i_manual_key@@\"\n      ;;\n")
 	b.WriteString("  esac\nfi\n\n")
-	b.WriteString("# 7) 자동 갱신(cron)은 비밀번호를 입력할 수 없다. reload 명령이 sudo를 쓰는데 비밀번호가 필요하면 갱신 때 reload가 실패한다.\n")
+	b.WriteString("@@c_step7@@\n")
 	b.WriteString("case \"$RELOAD_CMD\" in\n  *sudo*)\n")
-	b.WriteString("    sudo -k 2>/dev/null || true # 방금 입력한 비밀번호의 캐시를 지워야 정확히 알 수 있다\n")
+	b.WriteString("    sudo -k 2>/dev/null || true @@c_sudo_k@@\n")
 	b.WriteString("    if ! sudo -n true 2>/dev/null; then\n")
 	b.WriteString("      echo \"\" >&2\n")
-	b.WriteString("      echo \"경고: reload 명령이 sudo를 쓰는데, 이 계정은 sudo에 비밀번호가 필요합니다.\" >&2\n")
-	b.WriteString("      echo \"  자동 갱신(cron)은 비밀번호를 입력할 수 없어서, 인증서 파일은 갱신돼도 웹서버가 reload되지 않고 옛 인증서로 계속 서비스됩니다.\" >&2\n")
-	b.WriteString("      echo \"  둘 중 하나로 해결하세요:\" >&2\n")
-	b.WriteString("      echo \"  1) reload에 필요한 명령만 비밀번호 없이 허용합니다 (sudoers의 NOPASSWD, visudo로 편집).\" >&2\n")
-	b.WriteString("      echo \"  2) sudo 없이 실행되는 reload 스크립트를 RELOAD_CMD로 지정합니다 (예: docker 그룹이면 docker exec <컨테이너> ... reload).\" >&2\n")
-	b.WriteString("      echo \"  reload 명령을 바꾸려면 ~/.acme.sh/acme.sh --install-cert -d $DOMAIN --ecc --reloadcmd '<새 명령>'을 다시 실행하세요.\" >&2\n")
+	b.WriteString("      echo \"@@w_sudo1@@\" >&2\n")
+	b.WriteString("      echo \"@@w_sudo2@@\" >&2\n")
+	b.WriteString("      echo \"@@w_sudo3@@\" >&2\n")
+	b.WriteString("      echo \"@@w_sudo4@@\" >&2\n")
+	b.WriteString("      echo \"@@w_sudo5@@\" >&2\n")
+	b.WriteString("      echo \"@@w_sudo6@@\" >&2\n")
 	b.WriteString("    fi ;;\nesac\n")
 	return b.String()
+}
+
+var tokenRE = regexp.MustCompile(`@@([a-z0-9_]+)@@`)
+
+// expand는 스크립트 본문의 @@키@@를 언어에 맞는 글로 바꾼다. 표에 없는 키는 그대로 남아 테스트가 잡는다.
+func expand(script string, l lang.Lang) string {
+	msgs := scriptMessages[string(l)]
+	if msgs == nil {
+		msgs = scriptMessages[string(lang.Default)]
+	}
+	return tokenRE.ReplaceAllStringFunc(script, func(tok string) string {
+		if v, ok := msgs[tokenRE.FindStringSubmatch(tok)[1]]; ok {
+			return v
+		}
+		return tok
+	})
 }
 
 // scriptView는 스크립트 하나의 내려받기 주소, 실행 명령, 내용이다. 비밀값은 들어 있지 않다.
@@ -320,14 +339,14 @@ type setupInfo struct {
 const setupFile = "setup.sh"
 
 // buildSetup은 base 주소 기준의 내려받기 주소와 실행 명령을 만든다. dir은 설정 예에 쓸 인증서 디렉터리다.
-func buildSetup(base, dir string) setupInfo {
+func buildSetup(base, dir string, l lang.Lang) setupInfo {
 	download := func(file string) (url, cmd string) {
 		url = base + "/acme/" + file
 		return url, fmt.Sprintf("curl -fsSL %s -o %s && ", url, file)
 	}
 	su, sc := download(setupFile)
 	info := setupInfo{
-		Setup: scriptView{ID: "setup", Label: "세팅", URL: su, Cmd: sc + "bash " + setupFile, Script: setupScript(base)},
+		Setup: scriptView{ID: "setup", Label: l.Pick("Setup", "세팅"), URL: su, Cmd: sc + "bash " + setupFile, Script: setupScript(base, l)},
 	}
 	for _, ws := range webServers {
 		info.Servers = append(info.Servers, serverView{ID: ws.ID, Label: ws.Label, Config: fmt.Sprintf(ws.Config, dir)})
@@ -340,12 +359,12 @@ func (a *API) setupBase(r *http.Request) string {
 	if base := a.PublicURLFor(r); base != "" {
 		return base
 	}
-	return "<ssl-checker 주소>"
+	return a.Lang.UnknownBaseURL()
 }
 
 // setup은 스크립트의 내용과 실행 명령이다. 누구나 볼 수 있다.
 func (a *API) setup(w http.ResponseWriter, r *http.Request) {
-	httpx.WriteJSON(w, http.StatusOK, buildSetup(a.setupBase(r), "<CERT_DIR>"))
+	httpx.WriteJSON(w, http.StatusOK, buildSetup(a.setupBase(r), "<CERT_DIR>", a.Lang))
 }
 
 // scriptFile은 스크립트를 텍스트로 내려준다. 서버에서 curl로 받아 실행한다.
@@ -357,5 +376,5 @@ func scriptFile(w http.ResponseWriter, body string) {
 
 // SetupScript는 GET /acme/setup.sh다. 내려받은 주소(PUBLIC_URL, 없으면 요청 주소)를 주소 기본값으로 넣는다.
 func (a *API) SetupScript(w http.ResponseWriter, r *http.Request) {
-	scriptFile(w, setupScript(a.PublicURLFor(r)))
+	scriptFile(w, setupScript(a.PublicURLFor(r), a.Lang))
 }
