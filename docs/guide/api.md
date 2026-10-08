@@ -210,7 +210,7 @@ ACME가 꺼진 도메인에 수정·재발급·확인·끄기를 부르면 409 `
 }
 ```
 
-`setup`은 스크립트 하나(`setup`)의 내려받기 주소, 실행 명령(`cmd`), 내용(`script`)과, 웹서버(`nginx`, `apache`, `caddy`)별 설정 예(`config`)입니다. 스크립트 하나가 acme.sh 설치 확인부터 웹서버 지정까지 모두 합니다. **스크립트에는 `password` 같은 비밀값이 없습니다.** 서버에서 실행할 때 `username`, `password`, `subdomain`을 입력하거나 환경변수로 넘깁니다. 주소는 `PUBLIC_URL`(없으면 요청 주소) 기준입니다. 키 재발급(`rotate`) 응답은 `rotated: true`이고, 이미 인증서가 있어도 새 키가 도메인 설정에 저장되도록 서버에서 세팅 스크립트를 `FORCE=1`로 다시 실행해야 합니다(예: `FORCE=1 bash setup.sh`).
+`setup`은 스크립트 하나(`setup`)의 내려받기 주소, 실행 명령(`cmd`), 내용(`script`)과, 웹서버(`nginx`, `apache`, `caddy`)별 설정 예(`config`)입니다. 스크립트 하나가 acme.sh 설치 확인부터 웹서버 지정까지 모두 합니다. **스크립트에는 `password` 같은 비밀값이 없습니다.** 서버에서 실행할 때 `username`, `password`를 입력하거나 환경변수로 넘깁니다(`subdomain`은 `/acme/verify`가 알려 줍니다). 주소는 `PUBLIC_URL`(없으면 요청 주소) 기준입니다. 키 재발급(`rotate`) 응답은 `rotated: true`이고, 이미 인증서가 있어도 새 키가 도메인 설정에 저장되도록 서버에서 세팅 스크립트를 `FORCE=1`로 다시 실행해야 합니다(예: `FORCE=1 bash setup.sh`).
 
 ### 설치·세팅 스크립트
 
@@ -234,7 +234,7 @@ ACME가 꺼진 도메인에 수정·재발급·확인·끄기를 부르면 409 `
 
 | 응답 | 뜻 |
 | --- | --- |
-| 200 `{"ok":true,"source_ip":"<호출한 IP>","fulldomain":"..."}` | 자격 증명이 맞고 허용 IP입니다. `fulldomain`은 도메인의 `_acme-challenge` CNAME이 가리켜야 할 주소입니다 |
+| 200 `{"ok":true,"source_ip":"<호출한 IP>","subdomain":"...","fulldomain":"..."}` | 자격 증명이 맞고 허용 IP입니다. `subdomain`은 acme.sh의 `ACMEDNS_SUBDOMAIN`이고, `fulldomain`은 도메인의 `_acme-challenge` CNAME이 가리켜야 할 주소입니다 |
 | 401 `forbidden` | username이나 password가 틀렸습니다 |
 | 403 `ip_not_allowed` + `source_ip` | 자격 증명은 맞지만 이 IP가 허용 목록에 없습니다 |
 | 429 `too_many_attempts` | 이 IP의 인증 실패가 너무 많습니다 |

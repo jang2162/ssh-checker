@@ -53,7 +53,7 @@ curl -sS -X POST {{.BaseURL}}/api/domains/<id>/acme -H "$A" -H "$J" -d '{"allowf
 
 - **`password`는 이 응답에서만 볼 수 있습니다.** 다시 얻을 방법이 없고, 잃어버리면 키를 재발급합니다.
 - 응답을 로그, 티켓, 채팅에 남기지 마세요.
-- `setup`의 스크립트에는 비밀값이 들어 있지 않습니다. 4단계에서 `username`, `password`, `subdomain`을 환경변수로 넘깁니다.
+- `setup`의 스크립트에는 비밀값이 들어 있지 않습니다. 4단계에서 `username`, `password`를 환경변수로 넘깁니다(`subdomain`은 서버가 알려 줍니다).
 - 이미 켜져 있으면 409 `acme_enabled`입니다.
 
 ### 3. CNAME 등록과 확인
@@ -85,13 +85,13 @@ curl -sS -X POST {{.BaseURL}}/api/domains/<id>/acme/check -H "$A" -H "$J"
 
 ```sh
 curl -fsSL {{.BaseURL}}/acme/setup.sh -o setup.sh
-ACMEDNS_USERNAME=<username> ACMEDNS_PASSWORD=<password> ACMEDNS_SUBDOMAIN=<subdomain> \
+ACMEDNS_USERNAME=<username> ACMEDNS_PASSWORD=<password> \
   ACME_EMAIL=<연락 이메일> WEB_SERVER=nginx DOMAIN=a.com CERT_DIR=/etc/ssl/a.com bash setup.sh
 ```
 
 스크립트는 이 순서로 진행하고, 문제가 있으면 발급 전에 이유를 알려 주고 멈춥니다.
 
-1. **자격 증명과 허용 IP 확인.** `POST {{.BaseURL}}/acme/verify`로 확인합니다. 이 서버의 IP가 `allowfrom`에 없으면 그 IP를 알려 줍니다. 그 IP를 `allowfrom`에 추가한 뒤(`PATCH /api/domains/<id>/acme`) 다시 실행합니다.
+1. **자격 증명과 허용 IP 확인.** `POST {{.BaseURL}}/acme/verify`로 확인합니다. 응답의 `subdomain`이 acme.sh의 `ACMEDNS_SUBDOMAIN`이라 입력하지 않습니다. 이 서버의 IP가 `allowfrom`에 없으면 그 IP를 알려 줍니다. 그 IP를 `allowfrom`에 추가한 뒤(`PATCH /api/domains/<id>/acme`) 다시 실행합니다.
 2. **acme.sh 확인.** 3.1.4 이상인지 보고, 없거나 낮으면 설치합니다(`ACME_EMAIL`이 필요합니다).
 3. **웹서버 지정과 위치 확인.** 설치된 `nginx`, `apache`, `caddy`를 감지해 기본값으로 쓰고 실행 파일과 설정 디렉터리를 확인합니다(`WEB_SERVER`, `WEB_CONF_DIR`). **감지되지 않거나 직접 reload하려면 `WEB_SERVER=manual`로 두고 `RELOAD_CMD`에 reload 스크립트나 명령을 넘깁니다**(예: `RELOAD_CMD=/usr/local/bin/reload-web.sh`). 경로로 준 스크립트는 실행할 수 있는지 확인합니다.
 4. **CNAME 확인.** `DOMAIN`의 `_acme-challenge.<도메인>` CNAME이 `/acme/verify`가 돌려준 `fulldomain`을 가리키는지 공개 DNS(`DNS_RESOLVER`, 기본 `1.1.1.1`)로 확인합니다. 없거나 다르면 등록할 레코드를 알려 주고 멈춥니다(터미널이 없을 때). 3단계에서 `cname_record`를 등록한 뒤 DNS 전파를 기다려 다시 실행합니다. 확인을 건너뛰려면 `SKIP_CNAME_CHECK=1`입니다.

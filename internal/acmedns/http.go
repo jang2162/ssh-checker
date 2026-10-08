@@ -151,7 +151,8 @@ func (h *Handler) verify(w http.ResponseWriter, r *http.Request) {
 		deny(http.StatusForbidden, "ip_not_allowed", "ip_unauthorized", map[string]string{"error": "ip_not_allowed", "source_ip": ip.String()})
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "source_ip": ip.String(), "fulldomain": h.Svc.FQDN(acct.Subdomain)})
+	// subdomain은 acme.sh의 ACMEDNS_SUBDOMAIN이다. 계정에 묶여 있어서 사용자가 입력할 필요가 없다.
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "source_ip": ip.String(), "subdomain": acct.Subdomain, "fulldomain": h.Svc.FQDN(acct.Subdomain)})
 }
 
 type registerRequest struct {

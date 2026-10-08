@@ -37,7 +37,7 @@ func TestSetupScriptsAreValidAndHoldNoCredentials(t *testing.T) {
 		if out, err := exec.Command(bash, "-n", "-c", script).CombinedOutput(); err != nil {
 			t.Errorf("%s: bash -n 실패: %v\n%s", name, err, out)
 		}
-		for _, bad := range []string{`ACMEDNS_USERNAME="`, `ACMEDNS_PASSWORD="`, `ACMEDNS_SUBDOMAIN="`, "export ACMEDNS_USERNAME", "export ACMEDNS_PASSWORD", "export ACMEDNS_SUBDOMAIN"} {
+		for _, bad := range []string{`ACMEDNS_USERNAME="`, `ACMEDNS_PASSWORD="`, `ACMEDNS_SUBDOMAIN="`, "export ACMEDNS_USERNAME=", "export ACMEDNS_PASSWORD="} {
 			if strings.Contains(script, bad) {
 				t.Errorf("%s: 스크립트에 값이 들어 있다(%s)", name, bad)
 			}
@@ -84,7 +84,7 @@ out=""
 while [ $# -gt 0 ]; do [ "$1" = -o ] && out=$2; shift; done
 cat > "$CALLS.stdin"
 echo "curl" >> "$CALLS"
-printf '%s' "${VERIFY_BODY:-{\"ok\":true,\"source_ip\":\"203.0.113.9\",\"fulldomain\":\"sub.acme.example.test\"}}" > "$out"
+printf '%s' "${VERIFY_BODY:-{\"ok\":true,\"source_ip\":\"203.0.113.9\",\"subdomain\":\"sub\",\"fulldomain\":\"sub.acme.example.test\"}}" > "$out"
 printf '%s' "${VERIFY_CODE:-200}"
 `)
 	e.write(filepath.Join(e.bin, "sudo"), "#!/bin/sh\necho \"sudo $*\" >> \"$CALLS\"\nexec \"$@\"\n")
@@ -116,7 +116,7 @@ func (e *setupEnv) installAcme(version string) {
 		return
 	}
 	e.write(path, "#!/bin/sh\n[ \"$1\" = --version ] && { echo https://github.com/acmesh-official/acme.sh; echo "+version+"; exit 0; }\n"+
-		"echo \"acme $*\" >> \"$CALLS\"\n[ -n \"$ISSUE_EXIT\" ] && [ \"$1\" = --issue ] && exit \"$ISSUE_EXIT\"\nexit 0\n")
+		"echo \"acme $*\" >> \"$CALLS\"\n[ \"$1\" = --issue ] && echo \"env ACMEDNS_SUBDOMAIN=$ACMEDNS_SUBDOMAIN\" >> \"$CALLS\"\n[ -n \"$ISSUE_EXIT\" ] && [ \"$1\" = --issue ] && exit \"$ISSUE_EXIT\"\nexit 0\n")
 }
 
 func (e *setupEnv) run(script string, extra ...string) (string, error) {
@@ -125,7 +125,7 @@ func (e *setupEnv) run(script string, extra ...string) (string, error) {
 	cmd := bashCmd(e.t, script)
 	cmd.Env = append([]string{
 		"HOME=" + e.home, "PATH=" + e.bin + ":/usr/bin:/bin", "CALLS=" + e.log,
-		"SSLCHK_URL=https://ssl.example.com", "ACMEDNS_USERNAME=u", "ACMEDNS_PASSWORD=p", "ACMEDNS_SUBDOMAIN=s",
+		"SSLCHK_URL=https://ssl.example.com", "ACMEDNS_USERNAME=u", "ACMEDNS_PASSWORD=p",
 		"DOMAIN=a.com", "CERT_DIR=" + e.certDir,
 		// 이 컴퓨터에 설치된 웹서버나 설정 디렉터리를 보지 않게 한다(테스트가 시스템에 의존하지 않도록).
 		"WEB_SEARCH_DIRS=" + e.bin, "WEB_CONF_DIR=" + filepath.Join(e.home, "no-web-conf"),
@@ -156,6 +156,10 @@ func TestSetupScriptRunsWithEnvValues(t *testing.T) {
 	// acme.sh와 /verify는 <주소>/acme로 부른다(인증서를 받는 서버용 API 접두사).
 	if args, _ := os.ReadFile(e.log + ".args"); !strings.Contains(string(args), "https://ssl.example.com/acme/verify") {
 		t.Errorf("/verify 주소 = %q", args)
+	}
+	// subdomain은 입력받지 않고 /verify 응답에서 받아 acme.sh(dns_acmedns)에 넘긴다.
+	if !strings.Contains(got, "env ACMEDNS_SUBDOMAIN=sub\n") || strings.Contains(got, "subdomain:") {
+		t.Errorf("subdomain은 서버가 알려 준 값을 써야 한다:\n%s", got)
 	}
 	// 비밀번호는 curl 인자가 아니라 표준입력으로 간다.
 	if in, _ := os.ReadFile(e.log + ".stdin"); !strings.Contains(string(in), "X-Api-Key: p") || !strings.Contains(string(in), "X-Api-User: u") {
@@ -393,7 +397,7 @@ func TestSetupScriptChecksCNAME(t *testing.T) {
 		t.Errorf("SKIP_CNAME_CHECK=1이면 계속해야 한다: err=%v\n%s", err, got)
 	}
 	// 서버가 챌린지 주소를 알려 주지 않으면(옛 서버) 확인을 건너뛴다.
-	if got, err = e.run(setup, web, `VERIFY_BODY={"ok":true,"source_ip":"203.0.113.9"}`, "DIG_ANSWER="); err != nil || !strings.Contains(got, "CNAME 확인을 건너뜁니다") {
+	if got, err = e.run(setup, web, `VERIFY_BODY={"ok":true,"source_ip":"203.0.113.9","subdomain":"sub"}`, "DIG_ANSWER="); err != nil || !strings.Contains(got, "CNAME 확인을 건너뜁니다") {
 		t.Errorf("챌린지 주소를 모르면 건너뛴다: err=%v\n%s", err, got)
 	}
 	// 공개 리졸버는 DNS_RESOLVER로 바꾼다(포트는 떼고 쓴다).
@@ -425,5 +429,27 @@ func TestSetupScriptCNAMELookupFallbacks(t *testing.T) {
 	}
 	if got, err := e.run(setup, web, "CNAME_TOOL=doh", `DOH_BODY={"Status":3}`); err == nil || !strings.Contains(got, "CNAME이 없습니다") {
 		t.Errorf("DoH로 못 찾으면 멈춰야 한다: err=%v\n%s", err, got)
+	}
+}
+
+// 서버가 알려 준 subdomain을 쓰므로 입력받지 않는다. 옛 서버처럼 알려 주지 않으면 환경변수로 받는다.
+func TestSetupScriptTakesSubdomainFromServer(t *testing.T) {
+	e := newSetupEnv(t)
+	setup := allScripts()["setup"]
+	got, err := e.run(setup, "WEB_SERVER=nginx")
+	if err != nil || strings.Contains(got, "subdomain:") || !strings.Contains(got, "env ACMEDNS_SUBDOMAIN=sub\n") {
+		t.Errorf("서버가 알려 준 subdomain을 써야 한다: err=%v\n%s", err, got)
+	}
+	// 환경변수로 다른 값을 넘겨도 계정에 묶인 서버 값이 우선한다(다르면 /update가 401로 거부하므로).
+	if got, err = e.run(setup, "WEB_SERVER=nginx", "ACMEDNS_SUBDOMAIN=other"); err != nil || !strings.Contains(got, "env ACMEDNS_SUBDOMAIN=sub\n") {
+		t.Errorf("서버 값이 우선해야 한다: err=%v\n%s", err, got)
+	}
+	// 서버가 알려 주지 않고 환경변수도 없으면 멈춘다.
+	body := `VERIFY_BODY={"ok":true,"source_ip":"203.0.113.9","fulldomain":"sub.acme.example.test"}`
+	if got, err = e.run(setup, "WEB_SERVER=nginx", body); err == nil || !strings.Contains(got, "서버가 subdomain을 알려 주지 않았습니다") || strings.Contains(got, "--issue") {
+		t.Errorf("subdomain을 알 수 없으면 멈춰야 한다: err=%v\n%s", err, got)
+	}
+	if got, err = e.run(setup, "WEB_SERVER=nginx", body, "ACMEDNS_SUBDOMAIN=sub"); err != nil || !strings.Contains(got, "env ACMEDNS_SUBDOMAIN=sub\n") {
+		t.Errorf("옛 서버는 환경변수로 받는다: err=%v\n%s", err, got)
 	}
 }

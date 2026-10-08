@@ -106,16 +106,21 @@ acme_ok() {
 // verifyFunc는 입력한 자격 증명으로 ssl-checker의 /verify를 불러, 자격 증명과 이 서버의 IP가 허용 목록에 있는지 확인한다.
 // 비밀번호는 curl 인자가 아니라 표준입력 설정(-K -)으로 넘겨 프로세스 목록에 보이지 않게 한다.
 const verifyFunc = `verify_server() {
-  local tmp code ip
+  local tmp code ip sub
   tmp=$(mktemp)
   code=$(printf 'header = "X-Api-User: %s"\nheader = "X-Api-Key: %s"\n' "$ACMEDNS_USERNAME" "$ACMEDNS_PASSWORD" |
     curl -sS -K - -o "$tmp" -w '%{http_code}' -X POST "$ACMEDNS_BASE_URL/verify") ||
     { rm -f "$tmp"; die "ssl-checker($ACMEDNS_BASE_URL)에 연결하지 못했습니다. 주소와 네트워크를 확인하세요."; }
   ip=$(sed -n 's/.*"source_ip":"\([^"]*\)".*/\1/p' "$tmp")
   FULLDOMAIN=$(sed -n 's/.*"fulldomain":"\([^"]*\)".*/\1/p' "$tmp")
+  sub=$(sed -n 's/.*"subdomain":"\([^"]*\)".*/\1/p' "$tmp")
   rm -f "$tmp"
   case "$code" in
-    200) echo "확인됨: 자격 증명이 맞고, 이 서버의 IP(${ip:-알 수 없음})가 허용 목록에 있습니다." ;;
+    200)
+      # subdomain은 계정에 묶여 있어 서버가 알려 준다. acme.sh(dns_acmedns)가 쓰는 값이라 입력받지 않는다.
+      [ -z "$sub" ] || { ACMEDNS_SUBDOMAIN=$sub; export ACMEDNS_SUBDOMAIN; }
+      [ -n "${ACMEDNS_SUBDOMAIN:-}" ] || die "서버가 subdomain을 알려 주지 않았습니다. ACMEDNS_SUBDOMAIN으로 직접 넘기세요."
+      echo "확인됨: 자격 증명이 맞고, 이 서버의 IP(${ip:-알 수 없음})가 허용 목록에 있습니다." ;;
     401) die "username 또는 password가 맞지 않습니다." ;;
     403) die "이 서버의 IP(${ip:-알 수 없음})가 허용 IP 목록에 없습니다. 관리자에게 이 IP를 허용 목록에 추가해 달라고 요청하세요." ;;
     429) die "인증 실패가 너무 많아 잠시 차단됐습니다. 잠시 후 다시 시도하세요." ;;
@@ -182,7 +187,6 @@ func setupScript(baseURL string) string {
 	b.WriteString("\n# 1) 자격 증명을 입력받고, 이 서버의 IP가 허용 목록에 있는지 확인한다. 통과해야 아래에서 설치한다.\n")
 	b.WriteString("ask ACMEDNS_USERNAME \"username\"\n")
 	b.WriteString("ask ACMEDNS_PASSWORD \"password (입력은 보이지 않습니다)\" \"\" secret\n")
-	b.WriteString("ask ACMEDNS_SUBDOMAIN \"subdomain\"\n")
 	b.WriteString("verify_server\n\n")
 	b.WriteString("# 2) acme.sh가 3.1.4 이상으로 설치되어 있는지 확인하고, 없거나 낮으면 설치한다.\n")
 	b.WriteString("if acme_ok; then\n")

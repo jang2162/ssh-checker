@@ -43,7 +43,7 @@ export function Guide() {
                 <tr><th>하는 일</th><th>물어보는 값 / 확인</th></tr>
               </thead>
               <tbody>
-                <tr><td>자격 증명 입력</td><td>ssl-checker 주소(내려받은 주소가 기본값), username, password(입력해도 보이지 않음), subdomain. ACME를 켤 때 나온 값입니다.</td></tr>
+                <tr><td>자격 증명 입력</td><td>ssl-checker 주소(내려받은 주소가 기본값), username, password(입력해도 보이지 않음). ACME를 켤 때 나온 값입니다. subdomain은 서버가 알려 주므로 입력하지 않습니다.</td></tr>
                 <tr><td>허용 IP 확인</td><td>입력한 자격 증명이 맞고 <strong>이 서버의 IP가 허용 목록에 있는지</strong> 확인합니다. 아니면 이 서버의 IP를 알려 주고 멈춥니다.</td></tr>
                 <tr><td>acme.sh 확인</td><td>3.1.4 이상이 설치되어 있는지 확인합니다. 없으면 만료 알림 메일 주소를 물어보고 설치합니다.</td></tr>
                 <tr><td>웹서버 지정</td><td>설치된 nginx, apache, caddy를 감지해 기본값으로 제안합니다. 실행 파일과 설정 디렉터리를 확인합니다. 감지되지 않거나 직접 reload하려면 <code>manual</code>을 골라 <strong>reload 스크립트</strong>(또는 명령)를 입력합니다.</td></tr>
@@ -59,7 +59,7 @@ export function Guide() {
             <h2>자동화와 에이전트</h2>
             <p>
               터미널이 없으면 값을 환경변수로 넘기면 묻지 않습니다. 예:{" "}
-              <code>ACMEDNS_USERNAME=… ACMEDNS_PASSWORD=… ACMEDNS_SUBDOMAIN=… WEB_SERVER=nginx DOMAIN=example.com bash setup.sh</code>. 웹서버를 직접 정하려면 <code>WEB_SERVER=manual RELOAD_CMD=/usr/local/bin/reload-web.sh</code>, 저장 경로는 <code>CERT_DIR</code>, 웹서버 설정 위치는 <code>WEB_CONF_DIR</code>로 넘깁니다.
+              <code>ACMEDNS_USERNAME=… ACMEDNS_PASSWORD=… WEB_SERVER=nginx DOMAIN=example.com bash setup.sh</code>. 웹서버를 직접 정하려면 <code>WEB_SERVER=manual RELOAD_CMD=/usr/local/bin/reload-web.sh</code>, 저장 경로는 <code>CERT_DIR</code>, 웹서버 설정 위치는 <code>WEB_CONF_DIR</code>로 넘깁니다.
               키를 재발급한 뒤에는 <code>FORCE=1</code>을 붙여 다시 실행합니다.
               비밀번호는 셸 기록에 남지 않게 주의하세요.
             </p>

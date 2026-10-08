@@ -81,7 +81,7 @@ curl -fsSL <앱>/acme/setup.sh -o setup.sh && bash setup.sh
 
 스크립트는 이 순서로 진행하고, 문제가 있으면 발급 전에 이유를 알려 주고 멈춥니다.
 
-1. **자격 증명과 허용 IP 확인.** ssl-checker 주소(내려받은 주소가 기본값), username, password(입력해도 보이지 않음), subdomain을 받아 확인합니다. 이 서버의 IP가 허용 IP 목록(`allowfrom`)에 없으면 그 IP를 알려 주므로, 관리자가 [허용 목록에 추가](api.md#post-acmeverify)한 뒤 다시 실행합니다.
+1. **자격 증명과 허용 IP 확인.** ssl-checker 주소(내려받은 주소가 기본값), username, password(입력해도 보이지 않음)를 받아 확인합니다. subdomain은 계정에 묶인 값이라 서버가 알려 주므로 입력하지 않습니다. 이 서버의 IP가 허용 IP 목록(`allowfrom`)에 없으면 그 IP를 알려 주므로, 관리자가 [허용 목록에 추가](api.md#post-acmeverify)한 뒤 다시 실행합니다.
 2. **acme.sh 확인.** 3.1.4 이상이 설치되어 있는지 확인하고, 없거나 낮으면 설치합니다(만료 알림 메일 주소를 물어봅니다).
 3. **웹서버 지정과 위치 확인.** 설치된 nginx, apache, caddy를 감지해 기본값으로 제안하고, 실행 파일과 설정 디렉터리를 확인합니다. **감지되지 않거나 직접 reload하려면 `manual`을 골라** reload 스크립트나 명령을 입력합니다(예: `/usr/local/bin/reload-web.sh`, `systemctl reload haproxy`). 경로로 준 스크립트는 실행할 수 있는지 확인합니다.
 4. **도메인과 CNAME 확인.** 인증서를 받을 도메인(`*.도메인`도 함께 받음)을 입력하면, `_acme-challenge.<도메인>`의 CNAME이 ACME를 켤 때 안내한 주소를 가리키는지 공개 DNS(기본 1.1.1.1)로 조회해 확인합니다. 없거나 다르면 등록할 레코드(`_acme-challenge.a.com. CNAME <서브도메인>.<챌린지 존>.`)를 보여 주고, 등록한 뒤 Enter로 다시 확인합니다(DNS 전파에 몇 분 걸릴 수 있습니다). 터미널이 없으면 멈추므로 등록한 뒤 다시 실행합니다.
@@ -94,7 +94,8 @@ curl -fsSL <앱>/acme/setup.sh -o setup.sh && bash setup.sh
 | 값 | 환경변수 | 기본값 |
 | --- | --- | --- |
 | ssl-checker 주소 | `SSLCHK_URL` | 스크립트를 내려받은 주소 |
-| username, password, subdomain | `ACMEDNS_USERNAME`, `ACMEDNS_PASSWORD`, `ACMEDNS_SUBDOMAIN` | 없음 |
+| username, password | `ACMEDNS_USERNAME`, `ACMEDNS_PASSWORD` | 없음 |
+| subdomain | `ACMEDNS_SUBDOMAIN` | 서버가 알려 준 값. 서버 값이 우선합니다 |
 | acme.sh 설치 시 메일 주소 | `ACME_EMAIL` | 없음(설치할 때만 필요) |
 | 웹서버 | `WEB_SERVER` | 감지된 첫 웹서버. 없으면 `manual` (`nginx`, `apache`, `caddy`, `manual`) |
 | 웹서버 설정 디렉터리 | `WEB_CONF_DIR` | 웹서버별 흔한 위치(`/etc/nginx` 등) |

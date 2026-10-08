@@ -512,7 +512,7 @@ func TestVerify(t *testing.T) {
 
 	rec := f.do(verifyReq(reg, "10.1.2.3:4000"))
 	var ok map[string]any
-	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &ok) != nil || ok["ok"] != true || ok["source_ip"] != "10.1.2.3" {
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &ok) != nil || ok["ok"] != true || ok["source_ip"] != "10.1.2.3" || ok["subdomain"] != reg.Subdomain {
 		t.Fatalf("허용 IP = %d %s", rec.Code, rec.Body)
 	}
 	if f.txtCount() != 0 {
