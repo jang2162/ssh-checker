@@ -49,7 +49,7 @@ curl -sS -X POST {{.BaseURL}}/api/domains/<id>/acme -H "$A" -H "$J" -d '{"allowf
 
 `allowfrom`은 `/acme/update`를 부를 수 있는 서버의 IP나 CIDR입니다(최대 64개). 키가 새어도 다른 곳에서는 못 쓰게 가능한 한 지정합니다. 빈 목록 `[]`이면 어디서든 부를 수 있습니다.
 
-응답(201)에는 `username`, `password`, `subdomain`, `fulldomain`, `cname_record`, `allowfrom`, `setup`(설치·세팅 명령), `rotated`가 있습니다.
+응답(201)에는 `username`, `password`, `subdomain`, `fulldomain`, `cname_record`, `allowfrom`, `setup`(스크립트와 실행 명령), `rotated`가 있습니다.
 
 - **`password`는 이 응답에서만 볼 수 있습니다.** 다시 얻을 방법이 없고, 잃어버리면 키를 재발급합니다.
 - 응답을 로그, 티켓, 채팅에 남기지 마세요.
@@ -81,25 +81,24 @@ curl -sS -X POST {{.BaseURL}}/api/domains/<id>/acme/check -H "$A" -H "$J"
 
 ### 4. 인증서를 받을 서버에서 발급
 
-인증서를 받는 서버가 쓰는 API와 스크립트는 모두 `{{.BaseURL}}/acme/*` 아래에 있습니다(`/acme/update`, `/acme/verify`, `/acme/install.sh`, `/acme/setup.sh`). 스크립트는 이 서버가 내려주고, **비밀값이 없으며** 실행할 때 값을 받습니다. 스크립트가 `ACMEDNS_BASE_URL={{.BaseURL}}/acme`로 정해 줍니다.
-
-먼저 acme.sh를 설치합니다(서버마다 한 번. 3.1.4 이상이 이미 있으면 건너뜁니다).
-
-```sh
-curl -fsSL {{.BaseURL}}/acme/install.sh -o install.sh && ACME_EMAIL=<연락 이메일> bash install.sh
-```
-
-다음에 세팅 스크립트 `setup.sh`를 내려받아 실행합니다. 웹서버는 `WEB_SERVER`(`nginx`, `apache`, `caddy`, 기본 `nginx`)로 고릅니다.
+인증서를 받는 서버가 쓰는 API와 스크립트는 모두 `{{.BaseURL}}/acme/*` 아래에 있습니다(`/acme/update`, `/acme/verify`, `/acme/setup.sh`). 스크립트는 이 서버가 내려주고, **비밀값이 없으며** 실행할 때 값을 받습니다. 스크립트 하나가 acme.sh 설치 확인부터 발급·설치까지 모두 합니다.
 
 ```sh
 curl -fsSL {{.BaseURL}}/acme/setup.sh -o setup.sh
 ACMEDNS_USERNAME=<username> ACMEDNS_PASSWORD=<password> ACMEDNS_SUBDOMAIN=<subdomain> \
-  WEB_SERVER=nginx DOMAIN=a.com CERT_DIR=/etc/ssl/a.com bash setup.sh
+  ACME_EMAIL=<연락 이메일> WEB_SERVER=nginx DOMAIN=a.com CERT_DIR=/etc/ssl/a.com bash setup.sh
 ```
 
-- 터미널이 없는 에이전트 셸에서는 값을 **환경변수로 넘겨야** 합니다. 환경변수가 있는 값은 묻지 않고, 기본값이 있는 값(`SSLCHK_URL`, `WEB_SERVER`, `CERT_DIR`, `RELOAD_CMD`, caddy는 `CERT_GROUP`)은 생략할 수 있습니다. 사람이 터미널에서 실행하면 하나씩 물어보고, password는 화면에 보이지 않습니다.
-- 스크립트는 발급 전에 **acme.sh가 3.1.4 이상으로 설치되어 있는지**, 그리고 **입력한 자격 증명과 이 서버의 IP가 허용 목록에 있는지** 확인합니다(`POST {{.BaseURL}}/acme/verify`). 설치가 안 되어 있으면 설치 명령을, 허용 IP가 아니면 이 서버의 IP를 알려 주고 멈춥니다. 그 IP를 `allowfrom`에 추가한 뒤 다시 실행합니다(`PATCH /api/domains/<id>/acme`).
-- 확인이 끝나면 `--issue`, `--install-cert`까지 실행합니다. `RELOAD_CMD`(웹서버 reload)와 `CERT_DIR`(인증서 저장 경로)는 웹서버별 기본값이 있습니다.
+스크립트는 이 순서로 진행하고, 문제가 있으면 발급 전에 이유를 알려 주고 멈춥니다.
+
+1. **자격 증명과 허용 IP 확인.** `POST {{.BaseURL}}/acme/verify`로 확인합니다. 이 서버의 IP가 `allowfrom`에 없으면 그 IP를 알려 줍니다. 그 IP를 `allowfrom`에 추가한 뒤(`PATCH /api/domains/<id>/acme`) 다시 실행합니다.
+2. **acme.sh 확인.** 3.1.4 이상인지 보고, 없거나 낮으면 설치합니다(`ACME_EMAIL`이 필요합니다).
+3. **웹서버 지정과 위치 확인.** 설치된 `nginx`, `apache`, `caddy`를 감지해 기본값으로 쓰고 실행 파일과 설정 디렉터리를 확인합니다(`WEB_SERVER`, `WEB_CONF_DIR`). **감지되지 않거나 직접 reload하려면 `WEB_SERVER=manual`로 두고 `RELOAD_CMD`에 reload 스크립트나 명령을 넘깁니다**(예: `RELOAD_CMD=/usr/local/bin/reload-web.sh`). 경로로 준 스크립트는 실행할 수 있는지 확인합니다.
+4. **CNAME 확인.** `DOMAIN`의 `_acme-challenge.<도메인>` CNAME이 `/acme/verify`가 돌려준 `fulldomain`을 가리키는지 공개 DNS(`DNS_RESOLVER`, 기본 `1.1.1.1`)로 확인합니다. 없거나 다르면 등록할 레코드를 알려 주고 멈춥니다(터미널이 없을 때). 3단계에서 `cname_record`를 등록한 뒤 DNS 전파를 기다려 다시 실행합니다. 확인을 건너뛰려면 `SKIP_CNAME_CHECK=1`입니다.
+5. **발급과 설치.** `CERT_DIR`(기본 `/etc/ssl/<도메인>`)에 저장하고 갱신될 때마다 `RELOAD_CMD`를 실행합니다. 웹서버별 기본 reload가 있고(Caddy는 `CERT_GROUP`도 씁니다), 이미 인증서가 있어도 안전하게 다시 실행됩니다.
+6. **웹서버 설정 확인.** 설정이 이 인증서를 이미 쓰는지 확인하고, 아니면 넣을 설정을 출력합니다.
+
+- 터미널이 없는 에이전트 셸에서는 값을 **환경변수로 넘겨야** 합니다. 환경변수가 있는 값은 묻지 않고, 기본값이 있는 값(`SSLCHK_URL`, `WEB_SERVER`, `CERT_DIR`, `RELOAD_CMD`, Caddy는 `CERT_GROUP`)은 생략할 수 있습니다. 사람이 터미널에서 실행하면 하나씩 물어보고, password는 화면에 보이지 않습니다.
 - 비밀번호를 로그, 티켓, 채팅에 남기지 마세요. 환경변수를 명령 앞에 붙이면 셸 기록에 남을 수 있으니, 대화형이면 입력으로 받는 편이 안전합니다.
 
 처음 연결하는 도메인은 **스테이징으로 먼저** 확인하면 운영 CA의 발급 횟수 제한에 걸리지 않습니다. 이 확인은 스크립트를 실행하기 전에 합니다.
@@ -141,7 +140,7 @@ curl -sS -X POST {{.BaseURL}}/api/domains/<id>/targets -H "$A" -H "$J" \
 | 허용 IP 변경 | `PATCH /api/domains/<id>/acme` `{"allowfrom":["203.0.113.0/24"]}` |
 | 끄기 | `DELETE /api/domains/<id>/acme` (204). 챌린지 TXT를 지웁니다. 다시 켜면 서브도메인이 새로 생겨 CNAME을 다시 걸어야 합니다 |
 
-**키를 재발급하면 서버에서 세팅 스크립트를 `FORCE=1`로 다시 실행해야 합니다**(예: `FORCE=1 WEB_SERVER=nginx bash setup.sh`). 새 `password`를 넘기면 `--issue --force`로 새 키가 acme.sh 설정에 저장됩니다. 그렇게 하지 않으면 acme.sh 설정에 옛 키가 남아, 다음 자동 갱신이 401로 실패합니다.
+**키를 재발급하면 서버에서 세팅 스크립트를 `FORCE=1`로 다시 실행해야 합니다**(예: `FORCE=1 bash setup.sh`, 값은 위와 같이 환경변수로 넘깁니다). 새 `password`를 넘기면 `--issue --force`로 새 키가 acme.sh 설정에 저장됩니다. 그렇게 하지 않으면 acme.sh 설정에 옛 키가 남아, 다음 자동 갱신이 401로 실패합니다.
 
 ## 상태 판정
 

@@ -58,7 +58,7 @@ DB를 잃으면 모든 계정이 사라집니다. 그러면 도메인마다 재�
 curl -s -X POST <앱>/api/domains/<id>/acme/rotate -H "Authorization: Bearer $ADMIN_KEY" -H 'Content-Type: application/json'
 ```
 
-응답의 새 `password`로 각 서버의 acme.sh 설정을 바꿉니다: 서버에서 세팅 스크립트를 `FORCE=1 WEB_SERVER=nginx bash setup.sh`처럼 다시 실행하고 새 password를 입력하면, `--issue --force`로 도메인 설정 파일에 새 값이 저장됩니다.
+응답의 새 `password`로 각 서버의 acme.sh 설정을 바꿉니다: 서버에서 세팅 스크립트를 `FORCE=1 bash setup.sh`처럼 다시 실행하고 새 password를 입력하면, `--issue --force`로 도메인 설정 파일에 새 값이 저장됩니다.
 
 도메인에서 ACME를 더 쓰지 않으면 **끕니다**. 계정을 폐기하고 챌린지 TXT를 지웁니다. 다시 켜면 서브도메인이 바뀌어 CNAME을 다시 걸어야 합니다.
 

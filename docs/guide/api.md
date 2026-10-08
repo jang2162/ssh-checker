@@ -6,11 +6,11 @@
 | --- | --- | --- | --- |
 | `POST` | `/acme/update` (옛 `/update`) | 각 서버의 acme.sh (`dns_acmedns`) | `X-Api-User`, `X-Api-Key` |
 | `POST` | `/acme/verify` (옛 `/verify`) | 세팅 스크립트(사전 점검) | `X-Api-User`, `X-Api-Key` |
-| `GET` | `/acme/install.sh`, `/acme/setup.sh` | 인증서를 받을 서버 | 없음 |
+| `GET` | `/acme/setup.sh` | 인증서를 받을 서버 | 없음 |
 | `POST` | `/register` | 관리자 | `Authorization: Bearer <ADMIN_KEY>` |
 | `GET` | `/health` | 모니터링, 컨테이너 헬스체크 | 없음 |
 
-인증서를 받는 서버가 부르는 경로는 `/acme/*` 하나에 모여 있습니다(API는 `update`, `verify`, 스크립트는 `install.sh`, `setup.sh`). 리버스 프록시에서 이 접두사만 바깥에 열면 되고, 나머지(`/api/*`, 화면, `/register`)는 내부망에 둘 수 있습니다. acme.sh에는 `ACMEDNS_BASE_URL=<주소>/acme`를 주면 `/acme/update`를 부릅니다(세팅 스크립트가 이렇게 정합니다). 루트의 `/update`, `/verify`는 기존 설정을 위해 같은 동작으로 남아 있습니다.
+인증서를 받는 서버가 부르는 경로는 `/acme/*` 하나에 모여 있습니다(API는 `update`, `verify`, 스크립트는 `setup.sh`). 리버스 프록시에서 이 접두사만 바깥에 열면 되고, 나머지(`/api/*`, 화면, `/register`)는 내부망에 둘 수 있습니다. acme.sh에는 `ACMEDNS_BASE_URL=<주소>/acme`를 주면 `/acme/update`를 부릅니다(세팅 스크립트가 이렇게 정합니다). 루트의 `/update`, `/verify`는 기존 설정을 위해 같은 동작으로 남아 있습니다.
 
 ## POST /acme/update
 
@@ -203,22 +203,30 @@ ACME가 꺼진 도메인에 수정·재발급·확인·끄기를 부르면 409 `
   "cname_record": "_acme-challenge.a.com. CNAME <uuid>.acme.example.com.",
   "allowfrom": ["10.0.1.0/24"],
   "setup": {
-    "install": {"id": "install", "label": "acme.sh 설치", "url": "https://.../acme/install.sh", "cmd": "curl -fsSL ... -o install.sh && bash install.sh", "script": "#!/usr/bin/env bash\n..."},
-    "setup": {"id": "setup", "label": "세팅", "url": "https://.../acme/setup.sh", "cmd": "curl -fsSL ... -o setup.sh && bash setup.sh", "script": "#!/usr/bin/env bash\n..."},
-    "servers": [{"id": "nginx", "label": "nginx", "cmd": "curl -fsSL ... -o setup.sh && WEB_SERVER=nginx bash setup.sh", "config": "ssl_certificate ...;"}]
+    "setup": {"id": "setup", "label": "세팅", "url": "https://.../acme/setup.sh", "cmd": "curl -fsSL https://.../acme/setup.sh -o setup.sh && bash setup.sh", "script": "#!/usr/bin/env bash\n..."},
+    "servers": [{"id": "nginx", "label": "nginx", "config": "ssl_certificate ...;"}]
   },
   "rotated": false
 }
 ```
 
-`setup`은 acme.sh 설치 스크립트(`install`), 세팅 스크립트(`setup`)의 내려받기 주소, 실행 명령(`cmd`), 내용(`script`)과, 웹서버(`nginx`, `apache`, `caddy`)별 실행 명령과 웹서버 설정 예(`config`)입니다. 세팅 스크립트는 하나이고 웹서버는 `WEB_SERVER`로 고릅니다. **스크립트에는 `password` 같은 비밀값이 없습니다.** 서버에서 실행할 때 `username`, `password`, `subdomain`을 입력하거나 환경변수로 넘깁니다. 주소는 `PUBLIC_URL`(없으면 요청 주소) 기준입니다. 키 재발급(`rotate`) 응답은 `rotated: true`이고, 이미 인증서가 있어도 새 키가 도메인 설정에 저장되도록 서버에서 세팅 스크립트를 `FORCE=1`로 다시 실행해야 합니다(예: `FORCE=1 WEB_SERVER=nginx bash setup.sh`).
+`setup`은 스크립트 하나(`setup`)의 내려받기 주소, 실행 명령(`cmd`), 내용(`script`)과, 웹서버(`nginx`, `apache`, `caddy`)별 설정 예(`config`)입니다. 스크립트 하나가 acme.sh 설치 확인부터 웹서버 지정까지 모두 합니다. **스크립트에는 `password` 같은 비밀값이 없습니다.** 서버에서 실행할 때 `username`, `password`, `subdomain`을 입력하거나 환경변수로 넘깁니다. 주소는 `PUBLIC_URL`(없으면 요청 주소) 기준입니다. 키 재발급(`rotate`) 응답은 `rotated: true`이고, 이미 인증서가 있어도 새 키가 도메인 설정에 저장되도록 서버에서 세팅 스크립트를 `FORCE=1`로 다시 실행해야 합니다(예: `FORCE=1 bash setup.sh`).
 
 ### 설치·세팅 스크립트
 
-- `GET /acme/install.sh`, `GET /acme/setup.sh`: 스크립트 파일(`text/plain`). 로그인 없이 받을 수 있고 비밀값이 없습니다.
+- `GET /acme/setup.sh`: 스크립트 파일(`text/plain`). 로그인 없이 받을 수 있고 비밀값이 없습니다. `curl -fsSL <주소>/acme/setup.sh -o setup.sh && bash setup.sh` 한 줄로 설정이 진행됩니다. `curl ... | bash`도 되며, 이때 입력은 `/dev/tty`에서 받습니다.
 - `GET /api/setup`: 위 스크립트의 내용과 실행 명령, 웹서버 설정 예(JSON).
 
-세팅 스크립트는 먼저 acme.sh가 3.1.4 이상으로 설치되어 있는지 확인하고, 입력한 자격 증명으로 `POST /acme/verify`를 불러 **자격 증명과 이 서버의 IP가 허용 목록(`allowfrom`)에 있는지** 확인한 뒤 발급합니다.
+스크립트는 이 순서로 진행하고, 문제가 있으면 발급 전에 이유를 알려 주고 멈춥니다.
+
+1. 자격 증명을 입력받아 `POST /acme/verify`로 **자격 증명과 이 서버의 IP가 허용 목록(`allowfrom`)에 있는지** 확인합니다.
+2. acme.sh가 3.1.4 이상인지 확인하고, 없거나 낮으면 설치합니다(만료 알림 메일 주소를 물어봅니다).
+3. 웹서버를 감지해 기본값으로 제안하고(`nginx`, `apache`, `caddy`), 실행 파일과 설정 디렉터리를 확인합니다. 감지되지 않거나 직접 reload하려면 `manual`을 골라 **reload 스크립트나 명령**(`RELOAD_CMD`)을 입력합니다. 경로로 준 스크립트는 실행할 수 있는지 확인합니다.
+4. 도메인을 입력받아 `_acme-challenge.<도메인>`의 **CNAME이 `/acme/verify`가 돌려준 `fulldomain`을 가리키는지** 공개 DNS(`DNS_RESOLVER`, 기본 `1.1.1.1`)로 확인합니다(`dig`, `host`, `nslookup`, 없으면 DNS over HTTPS). 없거나 다르면 등록할 레코드를 보여 주고, 터미널이면 등록한 뒤 다시 확인하고 아니면 멈춥니다. `SKIP_CNAME_CHECK=1`로 건너뜁니다.
+5. 인증서 저장 경로(`CERT_DIR`, 기본 `/etc/ssl/<도메인>`)와 reload 명령을 정하고 발급해 설치합니다.
+6. 웹서버 설정이 이 인증서를 이미 쓰는지 확인하고, 아니면 넣을 설정을 출력합니다.
+
+환경변수로 미리 넘기면 묻지 않습니다: `ACMEDNS_USERNAME`, `ACMEDNS_PASSWORD`, `ACMEDNS_SUBDOMAIN`, `SSLCHK_URL`, `ACME_EMAIL`, `WEB_SERVER`, `DOMAIN`, `CERT_DIR`, `CERT_GROUP`(Caddy), `RELOAD_CMD`. 웹서버 설정 위치는 `WEB_CONF_DIR`, 실행 파일을 더 찾아볼 위치는 `WEB_SEARCH_DIRS`로 정하고, 실행 파일 확인은 `SKIP_WEB_CHECK=1`로 건너뜁니다.
 
 ## POST /acme/verify
 
@@ -226,7 +234,7 @@ ACME가 꺼진 도메인에 수정·재발급·확인·끄기를 부르면 409 `
 
 | 응답 | 뜻 |
 | --- | --- |
-| 200 `{"ok":true,"source_ip":"<호출한 IP>","fulldomain":"..."}` | 자격 증명이 맞고 허용 IP입니다 |
+| 200 `{"ok":true,"source_ip":"<호출한 IP>","fulldomain":"..."}` | 자격 증명이 맞고 허용 IP입니다. `fulldomain`은 도메인의 `_acme-challenge` CNAME이 가리켜야 할 주소입니다 |
 | 401 `forbidden` | username이나 password가 틀렸습니다 |
 | 403 `ip_not_allowed` + `source_ip` | 자격 증명은 맞지만 이 IP가 허용 목록에 없습니다 |
 | 429 `too_many_attempts` | 이 IP의 인증 실패가 너무 많습니다 |

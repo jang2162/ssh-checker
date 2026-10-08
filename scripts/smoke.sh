@@ -48,13 +48,15 @@ echo "$resp" | grep -q '"ok":true' || { echo "unexpected /acme/verify response: 
 code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/acme/verify" -H "X-Api-User: $user" -H "X-Api-Key: wrong")
 [ "$code" = 401 ] || { echo "verify with wrong key returned $code" >&2; exit 1; }
 # 로그인 없이 내려받는 설치·세팅 스크립트: 셸 문법이 맞고, 비밀값이 없다.
-for f in install.sh setup.sh; do
-  curl -fsS "$BASE/acme/$f" -o "/tmp/smoke-$f"
-  bash -n "/tmp/smoke-$f" || { echo "/acme/$f is not valid shell" >&2; exit 1; }
-  ! grep -q "$pass" "/tmp/smoke-$f" || { echo "/acme/$f contains the password" >&2; exit 1; }
+curl -fsS "$BASE/acme/setup.sh" -o /tmp/smoke-setup.sh
+bash -n /tmp/smoke-setup.sh || { echo "/acme/setup.sh is not valid shell" >&2; exit 1; }
+! grep -q "$pass" /tmp/smoke-setup.sh || { echo "/acme/setup.sh contains the password" >&2; exit 1; }
+for want in verify_server check_cname get.acme.sh "manual)" find_bin; do
+  grep -q "$want" /tmp/smoke-setup.sh || { echo "/acme/setup.sh missing: $want" >&2; exit 1; }
 done
-grep -q "verify_server" /tmp/smoke-setup.sh || { echo "/acme/setup.sh missing verify step" >&2; exit 1; }
-rm -f /tmp/smoke-install.sh /tmp/smoke-setup.sh
+rm -f /tmp/smoke-setup.sh
+code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/acme/install.sh")
+[ "$code" = 404 ] || { echo "/acme/install.sh returned $code (설치는 setup.sh에 합쳐졌다)" >&2; exit 1; }
 
 summary=$(curl -fsS "$BASE/api/summary")
 echo "$summary" | grep -q '"domains":1' || { echo "unexpected summary: $summary" >&2; exit 1; }

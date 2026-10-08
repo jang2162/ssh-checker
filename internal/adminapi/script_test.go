@@ -5,8 +5,17 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
+
+// bashCmd는 제어 터미널이 없는 bash 프로세스를 만든다. 스크립트가 /dev/tty로 입력을 기다리지 않게 한다.
+func bashCmd(t *testing.T, script string) *exec.Cmd {
+	t.Helper()
+	cmd := exec.Command(bashPath(t), "-c", script)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	return cmd
+}
 
 func bashPath(t *testing.T) string {
 	t.Helper()
@@ -18,7 +27,7 @@ func bashPath(t *testing.T) string {
 }
 
 func allScripts() map[string]string {
-	return map[string]string{"install": installScript(), "setup": setupScript("https://ssl.example.com")}
+	return map[string]string{"setup": setupScript("https://ssl.example.com")}
 }
 
 // 생성한 스크립트가 셸 문법에 맞고, 자격 증명 값을 담고 있지 않다.
@@ -27,9 +36,6 @@ func TestSetupScriptsAreValidAndHoldNoCredentials(t *testing.T) {
 	for name, script := range allScripts() {
 		if out, err := exec.Command(bash, "-n", "-c", script).CombinedOutput(); err != nil {
 			t.Errorf("%s: bash -n 실패: %v\n%s", name, err, out)
-		}
-		if name == "install" {
-			continue
 		}
 		for _, bad := range []string{`ACMEDNS_USERNAME="`, `ACMEDNS_PASSWORD="`, `ACMEDNS_SUBDOMAIN="`, "export ACMEDNS_USERNAME", "export ACMEDNS_PASSWORD", "export ACMEDNS_SUBDOMAIN"} {
 			if strings.Contains(script, bad) {
@@ -62,15 +68,33 @@ func newSetupEnv(t *testing.T) *setupEnv {
 	e.installAcme("v3.1.4")
 	// /verify 응답은 VERIFY_CODE, VERIFY_BODY로 정한다. curl 인자(-o 파일)에 본문을 쓰고 상태 코드를 출력한다.
 	e.write(filepath.Join(e.bin, "curl"), `#!/bin/sh
+case "$*" in
+*dns-query*)
+  echo "curl doh" >> "$CALLS"
+  printf '%s' "${DOH_BODY:-}"
+  exit 0 ;;
+*get.acme.sh*)
+  echo "curl get.acme.sh" >> "$CALLS"
+  # get.acme.sh를 받아 sh로 실행하는 것을 흉내 낸다: 가짜 acme.sh를 설치한다.
+  printf 'echo "install $*" >> "$CALLS"\nmkdir -p "$HOME/.acme.sh"\nprintf "#!/bin/sh\\n[ \\"\\$1\\" = --version ] && { echo v3.1.4; exit 0; }\\necho \\"acme \\$*\\" >> \\"\\$CALLS\\"\\nexit 0\\n" > "$HOME/.acme.sh/acme.sh"\nchmod +x "$HOME/.acme.sh/acme.sh"\n'
+  exit 0 ;;
+esac
 echo "$@" > "$CALLS.args"
 out=""
 while [ $# -gt 0 ]; do [ "$1" = -o ] && out=$2; shift; done
 cat > "$CALLS.stdin"
 echo "curl" >> "$CALLS"
-printf '%s' "${VERIFY_BODY:-{\"ok\":true,\"source_ip\":\"203.0.113.9\"}}" > "$out"
+printf '%s' "${VERIFY_BODY:-{\"ok\":true,\"source_ip\":\"203.0.113.9\",\"fulldomain\":\"sub.acme.example.test\"}}" > "$out"
 printf '%s' "${VERIFY_CODE:-200}"
 `)
-	e.write(filepath.Join(e.bin, "sudo"), "#!/bin/sh\necho \"sudo $*\" >> \"$CALLS\"\nexit 0\n")
+	e.write(filepath.Join(e.bin, "sudo"), "#!/bin/sh\necho \"sudo $*\" >> \"$CALLS\"\nexec \"$@\"\n")
+	// DNS 조회 도구. DIG_ANSWER가 응답이다(기본은 알맞은 CNAME, 비우면 레코드 없음).
+	e.write(filepath.Join(e.bin, "dig"), "#!/bin/sh\necho \"dig $*\" >> \"$CALLS\"\nprintf '%s\\n' \"${DIG_ANSWER-sub.acme.example.test.}\"\n")
+	e.write(filepath.Join(e.bin, "host"), "#!/bin/sh\nif [ -n \"$HOST_ANSWER\" ]; then echo \"$2 is an alias for $HOST_ANSWER.\"; else echo \"Host $2 not found: 3(NXDOMAIN)\"; fi\n")
+	e.write(filepath.Join(e.bin, "nslookup"), "#!/bin/sh\nif [ -n \"$NS_ANSWER\" ]; then echo \"$3\tcanonical name = $NS_ANSWER.\"; else echo \"** server can't find $3: NXDOMAIN\"; fi\n")
+	for _, name := range []string{"nginx", "apache2", "caddy"} { // 설치된 웹서버처럼 보이는 가짜 실행 파일
+		e.write(filepath.Join(e.bin, name), "#!/bin/sh\nexit 0\n")
+	}
 	return e
 }
 
@@ -98,11 +122,13 @@ func (e *setupEnv) installAcme(version string) {
 func (e *setupEnv) run(script string, extra ...string) (string, error) {
 	e.t.Helper()
 	_ = os.Remove(e.log)
-	cmd := exec.Command(bashPath(e.t), "-c", script)
+	cmd := bashCmd(e.t, script)
 	cmd.Env = append([]string{
 		"HOME=" + e.home, "PATH=" + e.bin + ":/usr/bin:/bin", "CALLS=" + e.log,
 		"SSLCHK_URL=https://ssl.example.com", "ACMEDNS_USERNAME=u", "ACMEDNS_PASSWORD=p", "ACMEDNS_SUBDOMAIN=s",
 		"DOMAIN=a.com", "CERT_DIR=" + e.certDir,
+		// 이 컴퓨터에 설치된 웹서버나 설정 디렉터리를 보지 않게 한다(테스트가 시스템에 의존하지 않도록).
+		"WEB_SEARCH_DIRS=" + e.bin, "WEB_CONF_DIR=" + filepath.Join(e.home, "no-web-conf"),
 	}, extra...)
 	out, err := cmd.CombinedOutput()
 	calls, _ := os.ReadFile(e.log)
@@ -151,12 +177,12 @@ func TestSetupScriptRunsWithEnvValues(t *testing.T) {
 	if got, err = e.run(setup, "WEB_SERVER=apache"); err != nil || !strings.Contains(got, "--reloadcmd sudo systemctl reload apache2 || sudo systemctl reload httpd") {
 		t.Errorf("apache 기본 reload: err=%v\n%s", err, got)
 	}
-	if got, err = e.run(setup, "WEB_SERVER=iis"); err == nil || !strings.Contains(got, "WEB_SERVER는 nginx, apache, caddy 중 하나여야 합니다") || strings.Contains(got, "--issue") {
+	if got, err = e.run(setup, "WEB_SERVER=iis"); err == nil || !strings.Contains(got, "WEB_SERVER는 nginx, apache, caddy, manual 중 하나여야 합니다") || strings.Contains(got, "--issue") {
 		t.Errorf("모르는 웹서버는 발급 전에 멈춰야 한다: err=%v\n%s", err, got)
 	}
-	// WEB_SERVER를 안 넘기고 터미널도 없으면 기본값(nginx)을 쓴다.
+	// WEB_SERVER를 안 넘기고 터미널도 없으면, 감지된 웹서버(여기서는 셋 다 있어 첫 번째인 nginx)를 기본값으로 쓴다.
 	if got, err = e.run(setup); err != nil || !strings.Contains(got, "--reloadcmd sudo systemctl reload nginx") {
-		t.Errorf("웹서버 기본값은 nginx: err=%v\n%s", err, got)
+		t.Errorf("감지된 첫 웹서버가 기본값: err=%v\n%s", err, got)
 	}
 	if got, err = e.run(setup, "WEB_SERVER=caddy"); err != nil || !strings.Contains(got, "sudo chgrp caddy "+e.certDir+"/key.pem && chmod 640 "+e.certDir+"/key.pem && sudo systemctl reload caddy") {
 		t.Errorf("caddy는 키 그룹을 맞춘 뒤 reload한다: err=%v\n%s", err, got)
@@ -166,26 +192,40 @@ func TestSetupScriptRunsWithEnvValues(t *testing.T) {
 	}
 }
 
-// acme.sh가 없거나 3.1.4보다 낮으면 자격 증명을 묻거나 서버를 부르기 전에 멈추고, 설치 방법을 알려 준다.
-func TestSetupScriptChecksAcmeInstall(t *testing.T) {
+// acme.sh가 이미 3.1.4 이상이면 설치하지 않고, 없거나 낮으면 허용 IP 확인을 통과한 뒤에 설치한다.
+func TestSetupScriptInstallsAcmeWhenMissing(t *testing.T) {
 	e := newSetupEnv(t)
-	nginx := allScripts()["setup"]
+	setup := allScripts()["setup"]
+	const web = "WEB_SERVER=nginx"
+
+	// 이미 설치됨: 설치를 건너뛰고 이메일도 묻지 않는다.
+	got, err := e.run(setup, web)
+	if err != nil || strings.Contains(got, "get.acme.sh") || strings.Contains(got, "설치합니다") {
+		t.Errorf("설치되어 있으면 건너뛰어야 한다: err=%v\n%s", err, got)
+	}
+
 	for name, version := range map[string]string{"미설치": "", "낮은 버전": "v3.0.7"} {
 		e.installAcme(version)
-		got, err := e.run(nginx, "WEB_SERVER=nginx")
-		if err == nil || !strings.Contains(got, "acme.sh 3.1.4 이상이 설치되어 있지 않습니다") ||
-			!strings.Contains(got, "curl -fsSL https://ssl.example.com/acme/install.sh -o install.sh && bash install.sh") {
-			t.Errorf("%s: 설치 안내 없이 멈춰야 한다: err=%v\n%s", name, err, got)
+		// 이메일이 없으면(터미널 없음) 어느 값이 필요한지 알려 주고, 발급 전에 멈춘다.
+		got, err := e.run(setup, web)
+		if err == nil || !strings.Contains(got, "ACME_EMAIL 값이 필요합니다") || strings.Contains(got, "--issue") {
+			t.Errorf("%s: 이메일을 요구하며 멈춰야 한다: err=%v\n%s", name, err, got)
 		}
-		if strings.Contains(got, "curl\n") || strings.Contains(got, "--issue") {
-			t.Errorf("%s: 서버를 부르거나 발급하면 안 된다:\n%s", name, got)
+		// 이메일을 넘기면 설치하고 이어서 발급한다.
+		e.installAcme(version)
+		got, err = e.run(setup, web, "ACME_EMAIL=ops@example.com")
+		for _, want := range []string{"curl get.acme.sh", "install email=ops@example.com", "acme.sh 3.1.4 설치 완료", "--issue", "--install-cert"} {
+			if err != nil || !strings.Contains(got, want) {
+				t.Errorf("%s: 설치 뒤 진행해야 한다(%q 없음): err=%v\n%s", name, want, err, got)
+			}
 		}
 	}
-	// 3.1.4와 더 높은 버전은 통과한다(sort -V 비교).
+
+	// 3.1.4와 더 높은 버전은 설치하지 않고 통과한다(sort -V 비교).
 	for _, v := range []string{"v3.1.4", "v3.1.10", "v3.2.0", "v10.0.0"} {
 		e.installAcme(v)
-		if got, err := e.run(nginx, "WEB_SERVER=nginx"); err != nil {
-			t.Errorf("%s는 통과해야 한다: %v\n%s", v, err, got)
+		if got, err := e.run(setup, web); err != nil || strings.Contains(got, "get.acme.sh") {
+			t.Errorf("%s는 설치 없이 통과해야 한다: %v\n%s", v, err, got)
 		}
 	}
 }
@@ -202,6 +242,12 @@ func TestSetupScriptChecksAllowedIP(t *testing.T) {
 		{"차단됨", "429", `{"error":"too_many_attempts"}`, "잠시 후 다시 시도"},
 		{"서버 오류", "500", `{"error":"db_error"}`, "HTTP 500"},
 	}
+	// acme.sh가 없어도 허용 IP 확인이 먼저라서, 거부되면 아무것도 설치하지 않는다.
+	e.installAcme("")
+	if got, err := e.run(nginx, "WEB_SERVER=nginx", "VERIFY_CODE=403", `VERIFY_BODY={"error":"ip_not_allowed","source_ip":"198.51.100.7"}`, "ACME_EMAIL=ops@example.com"); err == nil || strings.Contains(got, "get.acme.sh") {
+		t.Errorf("허용 IP가 아니면 설치하지 않고 멈춰야 한다: err=%v\n%s", err, got)
+	}
+	e.installAcme("v3.1.4")
 	for _, c := range cases {
 		got, err := e.run(nginx, "WEB_SERVER=nginx", "VERIFY_CODE="+c.code, "VERIFY_BODY="+c.body)
 		if err == nil || !strings.Contains(got, c.want) {
@@ -213,30 +259,12 @@ func TestSetupScriptChecksAllowedIP(t *testing.T) {
 	}
 }
 
-// 설치 스크립트는 이미 설치되어 있으면 아무것도 하지 않고, 없으면 설치한다.
-func TestInstallScript(t *testing.T) {
-	e := newSetupEnv(t)
-	install := allScripts()["install"]
-	if got, err := e.run(install); err != nil || !strings.Contains(got, "이미 설치되어 있습니다") || strings.Contains(got, "curl\n") {
-		t.Errorf("설치된 경우 건너뛰어야 한다: err=%v\n%s", err, got)
-	}
-	e.installAcme("")
-	got, err := e.run(install)
-	if err == nil || !strings.Contains(got, "ACME_EMAIL 값이 필요합니다") {
-		t.Errorf("미설치이면 이메일을 요구해야 한다: err=%v\n%s", err, got)
-	}
-}
-
 // acme.sh가 있어도 값이 없고 터미널도 아니면, 어느 값이 필요한지 알려 주고 acme.sh를 건드리지 않고 멈춘다.
 func TestSetupScriptStopsWithoutValues(t *testing.T) {
-	bash := bashPath(t)
 	e := newSetupEnv(t)
 	for name, script := range allScripts() {
-		if name == "install" {
-			continue
-		}
-		cmd := exec.Command(bash, "-c", script)
-		cmd.Env = []string{"HOME=" + e.home, "PATH=" + e.bin + ":/usr/bin:/bin", "CALLS=" + e.log} // 자격 증명 없음
+		cmd := bashCmd(t, script)
+		cmd.Env = []string{"HOME=" + e.home, "PATH=" + e.bin + ":/usr/bin:/bin", "CALLS=" + e.log, "WEB_SEARCH_DIRS=" + e.bin} // 자격 증명 없음
 		out, err := cmd.CombinedOutput()
 		if err == nil || !strings.Contains(string(out), "ACMEDNS_USERNAME 값이 필요합니다") {
 			t.Errorf("%s: 값이 없으면 멈춰야 한다: err=%v out=%s", name, err, out)
@@ -244,5 +272,158 @@ func TestSetupScriptStopsWithoutValues(t *testing.T) {
 		if calls, _ := os.ReadFile(e.log); strings.Contains(string(calls), "--issue") {
 			t.Errorf("%s: 발급까지 갔다: %s", name, calls)
 		}
+	}
+}
+
+func (e *setupEnv) removeWebServers() {
+	for _, name := range []string{"nginx", "apache2", "caddy"} {
+		_ = os.Remove(filepath.Join(e.bin, name))
+	}
+}
+
+// 웹서버를 감지해 기본값으로 쓰고, 감지되지 않으면 수동(manual)이 기본이라 reload 스크립트를 직접 받는다.
+func TestSetupScriptDetectsWebServer(t *testing.T) {
+	e := newSetupEnv(t)
+	setup := allScripts()["setup"]
+
+	got, err := e.run(setup)
+	if err != nil || !strings.Contains(got, "감지된 웹서버: nginx apache caddy") || !strings.Contains(got, "확인됨: nginx 실행 파일 ") {
+		t.Errorf("설치된 웹서버를 감지해야 한다: err=%v\n%s", err, got)
+	}
+
+	e.removeWebServers()
+	e.write(filepath.Join(e.bin, "caddy"), "#!/bin/sh\nexit 0\n")
+	if got, err = e.run(setup, "CERT_GROUP=web"); err != nil || !strings.Contains(got, "감지된 웹서버: caddy") || !strings.Contains(got, "sudo chgrp web ") {
+		t.Errorf("하나만 있으면 그것이 기본값: err=%v\n%s", err, got)
+	}
+
+	// 아무것도 감지되지 않으면 수동이 기본이고, reload 스크립트(RELOAD_CMD)가 없으면 발급 전에 멈춘다.
+	e.removeWebServers()
+	got, err = e.run(setup)
+	if err == nil || !strings.Contains(got, "감지된 웹서버가 없습니다. 수동 설정(manual)") || !strings.Contains(got, "RELOAD_CMD 값이 필요합니다") || strings.Contains(got, "--issue") {
+		t.Errorf("감지 실패 시 reload 스크립트를 요구해야 한다: err=%v\n%s", err, got)
+	}
+	if got, err = e.run(setup, "RELOAD_CMD=systemctl reload haproxy"); err != nil || !strings.Contains(got, "--reloadcmd systemctl reload haproxy") || !strings.Contains(got, "개인 키:") {
+		t.Errorf("수동 설정은 입력한 reload 명령을 쓰고 인증서 경로를 안내한다: err=%v\n%s", err, got)
+	}
+
+	// 고른 웹서버가 설치되어 있지 않으면 발급 전에 멈추고 수동 설정을 안내한다. SKIP_WEB_CHECK=1이면 건너뛴다.
+	got, err = e.run(setup, "WEB_SERVER=nginx")
+	if err == nil || !strings.Contains(got, "nginx 실행 파일을 찾지 못했습니다") || !strings.Contains(got, "WEB_SERVER=manual") || strings.Contains(got, "--issue") {
+		t.Errorf("없는 웹서버는 멈춰야 한다: err=%v\n%s", err, got)
+	}
+	if got, err = e.run(setup, "WEB_SERVER=nginx", "SKIP_WEB_CHECK=1"); err != nil || !strings.Contains(got, "--issue") {
+		t.Errorf("SKIP_WEB_CHECK=1이면 건너뛴다: err=%v\n%s", err, got)
+	}
+}
+
+// reload 스크립트 경로를 넘기면 실행할 수 있는지 먼저 확인한다.
+func TestSetupScriptChecksReloadScript(t *testing.T) {
+	e := newSetupEnv(t)
+	setup := allScripts()["setup"]
+	script := filepath.Join(e.home, "reload-web.sh")
+
+	got, err := e.run(setup, "WEB_SERVER=manual", "RELOAD_CMD="+script)
+	if err == nil || !strings.Contains(got, "reload 스크립트를 실행할 수 없습니다: "+script) || strings.Contains(got, "--issue") {
+		t.Errorf("없는 스크립트는 발급 전에 멈춰야 한다: err=%v\n%s", err, got)
+	}
+	e.write(script, "#!/bin/sh\nexit 0\n")
+	if got, err = e.run(setup, "WEB_SERVER=manual", "RELOAD_CMD="+script); err != nil || !strings.Contains(got, "--reloadcmd "+script) {
+		t.Errorf("실행 가능한 스크립트는 그대로 쓴다: err=%v\n%s", err, got)
+	}
+	// sudo를 붙여도 스크립트를 확인한다.
+	if got, err = e.run(setup, "WEB_SERVER=manual", "RELOAD_CMD=sudo "+filepath.Join(e.home, "nope.sh")); err == nil || !strings.Contains(got, "reload 스크립트를 실행할 수 없습니다") {
+		t.Errorf("sudo 뒤의 스크립트도 확인해야 한다: err=%v\n%s", err, got)
+	}
+}
+
+// 발급 뒤에 웹서버 설정이 이미 이 인증서 경로를 쓰는지 확인하고, 아니면 넣을 설정을 보여 준다.
+func TestSetupScriptChecksWebServerConfig(t *testing.T) {
+	e := newSetupEnv(t)
+	setup := allScripts()["setup"]
+	conf := filepath.Join(e.home, "nginx-conf")
+	e.write(filepath.Join(conf, "sites", "a.conf"), "server { listen 80; }\n")
+
+	got, err := e.run(setup, "WEB_SERVER=nginx", "WEB_CONF_DIR="+conf)
+	for _, want := range []string{"확인됨: nginx 설정 디렉터리 " + conf, "nginx 설정에 아래를 넣고 reload하세요", "ssl_certificate     " + e.certDir + "/fullchain.pem;", "ssl_certificate_key " + e.certDir + "/key.pem;"} {
+		if err != nil || !strings.Contains(got, want) {
+			t.Errorf("설정에 반영되지 않았으면 넣을 설정을 보여 줘야 한다(%q 없음): err=%v\n%s", want, err, got)
+		}
+	}
+
+	e.write(filepath.Join(conf, "sites", "a.conf"), "server { ssl_certificate "+e.certDir+"/fullchain.pem; }\n")
+	if got, err = e.run(setup, "WEB_SERVER=nginx", "WEB_CONF_DIR="+conf); err != nil || !strings.Contains(got, "확인됨: nginx 설정이 이미 이 인증서를 쓰고 있습니다") || strings.Contains(got, "아래를 넣고") {
+		t.Errorf("이미 반영되어 있으면 안내만 한다: err=%v\n%s", err, got)
+	}
+
+	// 설정 디렉터리를 못 찾아도 발급은 계속하고, 위치를 알려 달라고 안내한다.
+	if got, err = e.run(setup, "WEB_SERVER=nginx"); err != nil || !strings.Contains(got, "설정 디렉터리를 찾지 못했습니다") || !strings.Contains(got, "WEB_CONF_DIR") {
+		t.Errorf("설정 디렉터리를 못 찾으면 알리고 계속한다: err=%v\n%s", err, got)
+	}
+}
+
+// 발급 전에 도메인의 _acme-challenge CNAME이 서버가 알려 준 주소를 가리키는지 확인한다.
+func TestSetupScriptChecksCNAME(t *testing.T) {
+	e := newSetupEnv(t)
+	setup := allScripts()["setup"]
+	const web = "WEB_SERVER=nginx"
+	record := "_acme-challenge.a.com.  CNAME  sub.acme.example.test."
+
+	// 맞으면 통과한다. 대소문자와 끝 점 차이는 무시한다.
+	got, err := e.run(setup, web, "DIG_ANSWER=SUB.Acme.Example.test.")
+	if err != nil || !strings.Contains(got, "확인됨: _acme-challenge.a.com CNAME → sub.acme.example.test") || !strings.Contains(got, "dig +short +time=5 +tries=1 CNAME _acme-challenge.a.com @1.1.1.1") {
+		t.Errorf("맞는 CNAME은 통과해야 한다: err=%v\n%s", err, got)
+	}
+
+	// 없으면 등록할 레코드를 알려 주고 발급 전에 멈춘다.
+	got, err = e.run(setup, web, "DIG_ANSWER=")
+	if err == nil || !strings.Contains(got, "CNAME이 없습니다: _acme-challenge.a.com") || !strings.Contains(got, record) || strings.Contains(got, "--issue") {
+		t.Errorf("CNAME이 없으면 멈춰야 한다: err=%v\n%s", err, got)
+	}
+	// 다른 곳을 가리키면 현재 값과 등록할 레코드를 알려 준다.
+	got, err = e.run(setup, web, "DIG_ANSWER=other.example.net.")
+	if err == nil || !strings.Contains(got, "다른 곳을 가리킵니다: _acme-challenge.a.com → other.example.net") || !strings.Contains(got, record) || strings.Contains(got, "--issue") {
+		t.Errorf("다른 CNAME은 멈춰야 한다: err=%v\n%s", err, got)
+	}
+	if !strings.Contains(got, "SKIP_CNAME_CHECK=1") {
+		t.Errorf("건너뛰는 방법을 알려 줘야 한다:\n%s", got)
+	}
+	// 건너뛰면 경고만 하고 계속한다.
+	if got, err = e.run(setup, web, "DIG_ANSWER=", "SKIP_CNAME_CHECK=1"); err != nil || !strings.Contains(got, "확인을 건너뜁니다") || !strings.Contains(got, "--issue") {
+		t.Errorf("SKIP_CNAME_CHECK=1이면 계속해야 한다: err=%v\n%s", err, got)
+	}
+	// 서버가 챌린지 주소를 알려 주지 않으면(옛 서버) 확인을 건너뛴다.
+	if got, err = e.run(setup, web, `VERIFY_BODY={"ok":true,"source_ip":"203.0.113.9"}`, "DIG_ANSWER="); err != nil || !strings.Contains(got, "CNAME 확인을 건너뜁니다") {
+		t.Errorf("챌린지 주소를 모르면 건너뛴다: err=%v\n%s", err, got)
+	}
+	// 공개 리졸버는 DNS_RESOLVER로 바꾼다(포트는 떼고 쓴다).
+	if got, err = e.run(setup, web, "DNS_RESOLVER=9.9.9.9:53"); err != nil || !strings.Contains(got, "@9.9.9.9") {
+		t.Errorf("DNS_RESOLVER를 따라야 한다: err=%v\n%s", err, got)
+	}
+}
+
+// dig가 없을 때 쓰는 대체 조회(host, nslookup, DNS over HTTPS)도 같은 결과를 낸다.
+func TestSetupScriptCNAMELookupFallbacks(t *testing.T) {
+	e := newSetupEnv(t)
+	setup := allScripts()["setup"]
+	const web = "WEB_SERVER=nginx"
+	ok := "확인됨: _acme-challenge.a.com CNAME → sub.acme.example.test"
+
+	if got, err := e.run(setup, web, "CNAME_TOOL=host", "HOST_ANSWER=sub.acme.example.test"); err != nil || !strings.Contains(got, ok) || strings.Contains(got, "dig +short") {
+		t.Errorf("host: err=%v\n%s", err, got)
+	}
+	if got, err := e.run(setup, web, "CNAME_TOOL=nslookup", "NS_ANSWER=sub.acme.example.test"); err != nil || !strings.Contains(got, ok) {
+		t.Errorf("nslookup: err=%v\n%s", err, got)
+	}
+	doh := `{"Status":0,"Answer":[{"name":"_acme-challenge.a.com","type":5,"TTL":300,"data":"sub.acme.example.test."}]}`
+	if got, err := e.run(setup, web, "CNAME_TOOL=doh", "DOH_BODY="+doh); err != nil || !strings.Contains(got, ok) || !strings.Contains(got, "curl doh") {
+		t.Errorf("doh: err=%v\n%s", err, got)
+	}
+	// 대체 조회에서도 없으면 멈춘다.
+	if got, err := e.run(setup, web, "CNAME_TOOL=host"); err == nil || !strings.Contains(got, "CNAME이 없습니다") {
+		t.Errorf("host로 못 찾으면 멈춰야 한다: err=%v\n%s", err, got)
+	}
+	if got, err := e.run(setup, web, "CNAME_TOOL=doh", `DOH_BODY={"Status":3}`); err == nil || !strings.Contains(got, "CNAME이 없습니다") {
+		t.Errorf("DoH로 못 찾으면 멈춰야 한다: err=%v\n%s", err, got)
 	}
 }

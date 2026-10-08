@@ -111,7 +111,7 @@ export interface Credentials {
   fulldomain: string;
   cname_record: string;
   allowfrom: string[];
-  /** acme.sh 설치와 웹서버별 세팅 스크립트. 비밀값은 들어 있지 않고, 서버에서 실행할 때 위 값을 입력한다. */
+  /** 설치·세팅 스크립트와 웹서버별 실행 명령. 비밀값은 들어 있지 않고, 서버에서 실행할 때 위 값을 입력한다. */
   setup: Setup;
   /** true이면 키 재발급 응답이다. 세팅 스크립트를 FORCE=1로 다시 실행해야 새 키가 저장된다. */
   rotated: boolean;
@@ -129,17 +129,16 @@ export interface SetupScript {
   script: string;
 }
 
-/** 웹서버(nginx, apache, caddy) 하나의 세팅 명령과 웹서버 설정 예. 스크립트는 같고 WEB_SERVER만 다르다. */
+/** 웹서버(nginx, apache, caddy) 하나의 설정 예. 스크립트는 하나이고 웹서버는 스크립트가 감지하거나 묻는다. */
 export interface ServerSetup {
   id: string;
   label: string;
-  cmd: string;
   config: string;
 }
 
-/** GET /api/setup. acme.sh 설치 스크립트, 세팅 스크립트, 웹서버별 실행 명령. */
+/** GET /api/setup. 설치·세팅 스크립트와 웹서버별 실행 명령. */
 export interface Setup {
-  install: SetupScript;
+  /** 설치 확인(없으면 설치), 허용 IP 확인, 발급·설치까지 하는 스크립트. */
   setup: SetupScript;
   servers: ServerSetup[];
 }
