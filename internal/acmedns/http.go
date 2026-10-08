@@ -34,7 +34,12 @@ type Handler struct {
 
 func (h *Handler) Routes() http.Handler {
 	mux := http.NewServeMux()
+	// /acme/ 아래는 인증서를 받는 서버가 부르는 경로다. 리버스 프록시에서 /acme/* 한 줄로 열 수 있다.
+	// ACMEDNS_BASE_URL을 <주소>/acme로 두면 acme.sh가 /acme/update를 부른다. 루트의 /update는 기존 설정을 위해 남긴다.
 	mux.HandleFunc("POST /update", h.update)
+	mux.HandleFunc("POST /acme/update", h.update)
+	mux.HandleFunc("POST /verify", h.verify)
+	mux.HandleFunc("POST /acme/verify", h.verify)
 	mux.Handle("POST /register", h.Admin.Wrap(http.HandlerFunc(h.register)))
 	mux.HandleFunc("GET /health", h.health)
 	return mux
@@ -114,6 +119,39 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		h.recordUpdate(ctx, acct.ID, true)
 		httpx.WriteJSON(w, http.StatusOK, map[string]string{"txt": req.TXT})
 	}
+}
+
+// verify는 서버에서 설정하기 전에 쓰는 사전 점검이다. /update와 같은 인증과 허용 IP 검사를 하되 TXT는 건드리지 않는다.
+// 자격 증명이 맞은 뒤에만 "허용 IP에 없다"와 호출한 IP를 알려 준다. 거부는 /update와 같은 IP별 실패 예산을 쓴다.
+func (h *Handler) verify(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	ip := h.IP.From(r)
+	user := truncate(r.Header.Get("X-Api-User"), maxActorLen)
+	deny := func(status int, code, reason string, body map[string]string) {
+		h.AuthFailLimit.Allow(ip.String())
+		h.audit(ctx, store.AuditEntry{Actor: "account:" + user, Action: "verify_denied", SourceIP: ip.String(), Detail: reason})
+		httpx.WriteJSON(w, status, body)
+	}
+	if h.AuthFailLimit.Exhausted(ip.String()) {
+		httpx.WriteError(w, http.StatusTooManyRequests, "too_many_attempts")
+		return
+	}
+	acct, err := h.Svc.Authenticate(ctx, r.Header.Get("X-Api-User"), r.Header.Get("X-Api-Key"))
+	if errors.Is(err, ErrForbidden) {
+		deny(http.StatusUnauthorized, "forbidden", "invalid_credentials", map[string]string{"error": "forbidden"})
+		return
+	}
+	if err != nil {
+		h.Log.Error("authenticate", "err", err)
+		httpx.WriteError(w, http.StatusInternalServerError, "db_error")
+		return
+	}
+	user = acct.Username
+	if !allowed(acct.AllowFrom, ip) {
+		deny(http.StatusForbidden, "ip_not_allowed", "ip_unauthorized", map[string]string{"error": "ip_not_allowed", "source_ip": ip.String()})
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "source_ip": ip.String(), "fulldomain": h.Svc.FQDN(acct.Subdomain)})
 }
 
 type registerRequest struct {

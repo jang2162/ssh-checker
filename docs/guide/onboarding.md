@@ -36,7 +36,7 @@ unset ADMIN_KEY A
 
 - `allowfrom`: 이 계정으로 `/update`를 부를 수 있는 서버 IP나 CIDR 목록. 비우면 어디서든 부를 수 있습니다. 서버 IP를 알고 있다면 넣는 것을 권장합니다. 프록시 뒤나 rootless Docker라면 먼저 [출발지 IP를 확인](configuration.md#네트워크와-프록시)합니다.
 
-응답에는 `username`, `password`, `subdomain`, `fulldomain`, 등록할 CNAME 한 줄(`cname_record`), 그리고 3단계에서 그대로 붙여 넣을 acme.sh 명령(`acme_sh`)이 들어 있습니다.
+응답에는 `username`, `password`, `subdomain`, `fulldomain`, 등록할 CNAME 한 줄(`cname_record`), 그리고 3단계에서 서버가 실행할 설치·세팅 명령(`setup`)이 들어 있습니다. 스크립트에는 비밀값이 없습니다.
 
 `password`는 이때 한 번만 나오고 다시 볼 수 없습니다. 이 도메인의 인증서를 발급받을 수 있는 비밀이므로 시크릿 저장소에 바로 넣습니다. 티켓이나 채팅에 붙이지 않습니다. 잃어버리면 [키를 재발급](operations.md#계정-폐기와-키-재발급)합니다. 서브도메인이 그대로라 CNAME은 다시 걸지 않아도 됩니다.
 
@@ -71,31 +71,51 @@ dig +short CAA a.com
 
 인증서를 쓸 서버에서 실행합니다. acme.sh는 **3.1.4 이상**을 씁니다. 그보다 낮은 버전은 ARI(갱신 시점 안내)를 지원하지 않습니다.
 
-### acme.sh 설치
+### 설치·세팅 스크립트로 한 번에
+
+설치와 세팅 스크립트는 ssl-checker가 내려줍니다. 대시보드의 [이용 방법](dashboard.md) 페이지나 ACME를 켤 때 나오는 창에서 명령을 복사합니다. 스크립트에는 비밀값이 없고, 실행하면 값을 물어봅니다.
+
+**1. acme.sh 설치.** 서버마다 한 번만 합니다. 이미 3.1.4 이상이 있으면 아무것도 하지 않고 끝납니다. 만료 알림 메일 주소를 물어봅니다.
 
 ```bash
-curl -fsSL https://get.acme.sh | sh -s email=ops@example.com
-~/.acme.sh/acme.sh --version                         # 3.1.4 이상
-~/.acme.sh/acme.sh --set-default-ca --server letsencrypt
+curl -fsSL <앱>/acme/install.sh -o install.sh && bash install.sh
 ```
 
-### 자격 증명
-
-비밀번호는 입력으로 받아 셸 히스토리에 남기지 않습니다.
+**2. 세팅(발급과 설치).** 세팅 스크립트를 받아 실행합니다. 웹서버(`nginx`, `apache`, `caddy`)는 실행 중에 고르거나 `WEB_SERVER`로 미리 정합니다.
 
 ```bash
-export ACMEDNS_BASE_URL="<앱>"                        # 예: https://ssl-checker.example.com
-export ACMEDNS_USERNAME="<username>"
-read -rs ACMEDNS_PASSWORD && export ACMEDNS_PASSWORD
-export ACMEDNS_SUBDOMAIN="<subdomain>"
+curl -fsSL <앱>/acme/setup.sh -o setup.sh && WEB_SERVER=nginx bash setup.sh
 ```
+
+물어보는 값은 이렇습니다. 환경변수로 미리 넘기면 묻지 않습니다(터미널이 없는 자동화용).
+
+| 값 | 환경변수 | 기본값 |
+| --- | --- | --- |
+| 웹서버 | `WEB_SERVER` | `nginx` (`nginx`, `apache`, `caddy` 중 하나) |
+| ssl-checker 주소 | `SSLCHK_URL` | 스크립트를 내려받은 주소 |
+| username, password, subdomain | `ACMEDNS_USERNAME`, `ACMEDNS_PASSWORD`, `ACMEDNS_SUBDOMAIN` | 없음. password는 입력해도 보이지 않습니다 |
+| 인증서를 받을 도메인 | `DOMAIN` | 없음 |
+| 인증서를 저장할 디렉터리 | `CERT_DIR` | `/etc/ssl/<도메인>` |
+| 설치 뒤 실행할 명령 | `RELOAD_CMD` | 웹서버별 reload (Apache는 `apache2`, 없으면 `httpd`) |
+| 키 파일을 읽을 그룹 (Caddy만) | `CERT_GROUP` | `caddy` |
+
+스크립트는 발급하기 전에 두 가지를 확인하고, 문제가 있으면 이유를 알려 주고 멈춥니다.
+
+- **acme.sh가 3.1.4 이상으로 설치되어 있는지.** 아니면 위 1번 명령을 안내합니다.
+- **입력한 자격 증명과 이 서버의 IP가 허용 IP 목록(`allowfrom`)에 있는지.** 허용 밖이면 이 서버의 IP를 알려 주므로, 관리자가 그 IP를 [허용 목록에 추가](api.md#post-acmeverify)한 뒤 다시 실행합니다.
+
+이미 인증서가 있는 서버에서 다시 실행해도 안전합니다(`--issue`가 "아직 갱신할 때가 아님"으로 끝나도 설치까지 진행합니다). 키를 재발급한 뒤에는 `FORCE=1 WEB_SERVER=nginx bash setup.sh`로 실행해야 새 키가 저장됩니다.
+
+스크립트는 `~/.acme.sh/acme.sh --issue --dns dns_acmedns`(와일드카드 포함)와 `--install-cert --reloadcmd`를 실행하는 것과 같습니다. 직접 하려면 `ACMEDNS_BASE_URL=<앱>/acme`와 `ACMEDNS_USERNAME`, `ACMEDNS_PASSWORD`, `ACMEDNS_SUBDOMAIN`을 환경변수로 주고 이 명령을 실행합니다.
 
 ### 먼저 스테이징으로 확인
 
-처음 연결하는 도메인은 Let's Encrypt 스테이징으로 먼저 발급해 봅니다. 운영 CA의 발급 횟수 제한에 걸리지 않습니다.
+처음 연결하는 도메인은 Let's Encrypt 스테이징으로 먼저 발급해 봅니다. 운영 CA의 발급 횟수 제한에 걸리지 않습니다. 세팅 스크립트를 실행하기 전에 합니다.
 
 ```bash
-~/.acme.sh/acme.sh --issue --staging --dns dns_acmedns -d a.com -d '*.a.com'
+ACMEDNS_BASE_URL=<앱>/acme ACMEDNS_USERNAME=<username> ACMEDNS_SUBDOMAIN=<subdomain> \
+  bash -c 'read -rsp "password: " ACMEDNS_PASSWORD; echo; export ACMEDNS_PASSWORD
+  ~/.acme.sh/acme.sh --issue --staging --dns dns_acmedns -d a.com -d "*.a.com"'
 ```
 
 `Cert success.`가 나오면 스테이징 인증서를 지웁니다.
@@ -105,43 +125,34 @@ export ACMEDNS_SUBDOMAIN="<subdomain>"
 rm -rf ~/.acme.sh/a.com_ecc
 ```
 
-### 운영 발급
+### 웹서버 설정
 
-```bash
-~/.acme.sh/acme.sh --issue --dns dns_acmedns -d a.com -d '*.a.com'
-```
-
-### 웹서버에 설치
-
-인증서 파일을 웹서버가 읽는 곳에 복사하고, 갱신될 때마다 다시 읽게 합니다.
-
-```bash
-sudo mkdir -p /etc/ssl/a.com
-~/.acme.sh/acme.sh --install-cert -d a.com --ecc \
-  --key-file       /etc/ssl/a.com/key.pem \
-  --fullchain-file /etc/ssl/a.com/fullchain.pem \
-  --reloadcmd      "sudo systemctl reload nginx"
-```
-
-웹서버별 reload 명령:
-
-| 웹서버 | `--reloadcmd` |
-| --- | --- |
-| nginx | `systemctl reload nginx` |
-| Apache | `systemctl reload apache2` (RHEL 계열은 `httpd`) |
-| HAProxy | 인증서와 키를 한 파일로 합친 뒤 `systemctl reload haproxy` |
-| Docker 컨테이너 | `docker kill -s HUP <컨테이너>` 또는 `docker restart <컨테이너>` |
-
-nginx 설정 예:
+스크립트가 인증서를 `CERT_DIR`(기본 `/etc/ssl/<도메인>`)에 저장하고, 갱신될 때마다 reload합니다. 웹서버 설정에는 그 경로를 넣습니다.
 
 ```nginx
+# nginx
 ssl_certificate     /etc/ssl/a.com/fullchain.pem;
 ssl_certificate_key /etc/ssl/a.com/key.pem;
 ```
 
+```apache
+# Apache
+SSLCertificateFile    /etc/ssl/a.com/fullchain.pem
+SSLCertificateKeyFile /etc/ssl/a.com/key.pem
+```
+
+```caddy
+# Caddy
+example.com, *.example.com {
+	tls /etc/ssl/a.com/fullchain.pem /etc/ssl/a.com/key.pem
+}
+```
+
+HAProxy는 인증서와 키를 한 파일로 합친 뒤 `systemctl reload haproxy`, Docker 컨테이너는 `docker kill -s HUP <컨테이너>`나 `docker restart <컨테이너>`를 `RELOAD_CMD`로 넘깁니다.
+
 ## 4. 자동 갱신
 
-acme.sh는 설치할 때 cron을 등록합니다. 갱신 시점이 되면 같은 자격 증명으로 `/update`를 다시 부르고, 새 인증서를 설치한 뒤 `--reloadcmd`를 실행합니다. 따로 할 일은 없습니다.
+acme.sh는 설치할 때 cron을 등록합니다. 갱신 시점이 되면 같은 자격 증명으로 `/acme/update`를 다시 부르고, 새 인증서를 설치한 뒤 `--reloadcmd`를 실행합니다. 따로 할 일은 없습니다.
 
 - 자격 증명(`ACMEDNS_*`)은 acme.sh가 도메인 설정(`~/.acme.sh/a.com_ecc/a.com.conf`)에 저장합니다. 그래서 갱신 때는 환경변수가 필요 없습니다. 이 파일에는 비밀번호가 평문으로 들어 있으므로 서버 접근 권한을 관리합니다.
 - 갱신 상태 확인: `~/.acme.sh/acme.sh --list`

@@ -1,9 +1,26 @@
-# ssl-checker를 Caddy 뒤에 둘 때의 예시. 기존 Caddyfile에 블록을 추가한다.
-# api는 compose.caddy.yaml로 Caddy와 같은 Docker 네트워크에 붙고, 별칭 ssl-checker-api로 찾는다.
-#
-# 인증 기관은 이 API를 호출하지 않는다. 인증서를 받을 서버들과 관리자만 닿으면 되므로
-# 내부 대역만 통과시키고 나머지는 403으로 막는다. Caddy가 인터넷에 열려 있다면 꼭 둔다.
+# 인증서를 받는 서버가 쓰는 API와 스크립트는 모두 /acme/ 아래에 있어서 규칙은 한 줄이다.
+#   /acme/*  update, verify(API)와 install.sh, setup.sh(스크립트)
+#   그 밖에(대시보드, /api/*, 관리자 로그인, 옛 /update, /register)는 내부망만
+# 위에서부터 먼저 맞는 handle 하나만 실행된다.
 ssl-checker.example.com {
+	# 인증서를 받는 서버가 바깥에 있으면 연다. 내부 서버만 쓰면 이 블록을 지운다.
+	@acme path /acme/*
+	handle @acme {
+		reverse_proxy ssl-checker-api:8080
+	}
+
+	# (선택) 대시보드 조회를 바깥에도 보여 주려면 연다. 읽기 전용 경로만이다.
+	# @public_read {
+	# 	method GET HEAD
+	# 	path / /assets/* /api/summary /api/domains /api/config /api/codes /api/session
+	# }
+	# handle @public_read {
+	# 	reverse_proxy ssl-checker-api:8080
+	# }
+	# 도메인 상세(/domains/<id>, /api/domains/<id>, /api/targets/<id>/results)에는
+	# 대상 IP, 허용 IP, 계정 username이 들어 있어 위 목록에서 뺐다. 보여 줄 때만 따로 연다.
+
+	# 나머지(관리자 로그인, 쓰기, 감사 로그, 옛 /update 등)는 내부망만.
 	@internal remote_ip 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16
 	handle @internal {
 		reverse_proxy ssl-checker-api:8080

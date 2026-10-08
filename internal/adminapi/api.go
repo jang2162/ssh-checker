@@ -53,6 +53,7 @@ func (a *API) routes() []route {
 		{"GET", "/api/targets/{id}/results", a.targetResults},
 		{"GET", "/api/config", a.config},
 		{"GET", "/api/codes", a.codes},
+		{"GET", "/api/setup", a.setup},
 		{"GET", "/api/session", a.sessionStatus},
 		{"POST", "/api/session", jsonOnly(a.login)},
 		{"DELETE", "/api/session", jsonOnly(a.logout)},
@@ -84,6 +85,9 @@ func (a *API) Register(mux *http.ServeMux) {
 		}
 		allow[rt.pattern] = append(allow[rt.pattern], rt.method)
 	}
+	// 인증서를 받는 서버가 curl로 받는 설치·세팅 스크립트. 와일드카드 없이 두어 GET /acme/update는 405로 남는다.
+	mux.HandleFunc("GET /acme/install.sh", a.InstallScript)
+	mux.HandleFunc("GET /acme/setup.sh", a.SetupScript)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		if _, pattern := probe.Handler(r); pattern != "" {
 			methods := allow[pattern]

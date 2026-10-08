@@ -84,7 +84,7 @@ docker compose -p ssl-checker -f deploy/compose.yaml -f deploy/compose.ports.yam
 | --- | --- |
 | `db` | PostgreSQL 17. 데이터는 `pgdata` 볼륨에 둡니다. 포트를 외부에 열지 않습니다. |
 | `migrate` | 이미지를 빌드하고(`ssl-checker:local`), DB 마이그레이션을 적용한 뒤 종료합니다. 성공해야 api와 worker가 시작합니다. |
-| `api` | `/update`, `/register`, `/health`. `BIND_ADDR:API_PORT`로 열리거나, Caddy 네트워크에서 `ssl-checker-api:8080`으로 닿습니다. |
+| `api` | `/acme/*`(인증서를 받는 서버용 API와 스크립트), `/api/*`, 화면, `/register`, `/health`. 옛 `/update`도 남아 있습니다. `BIND_ADDR:API_PORT`로 열리거나, Caddy 네트워크에서 `ssl-checker-api:8080`으로 닿습니다. |
 | `worker` | `CHECK_INTERVAL`마다 TLS 점검과 ACME CNAME 점검을 돌리고, 하루에 한 번 고아 TXT를 정리하며 90일이 지난 점검 기록을 지웁니다. 작업 중복을 막기 위해 1개만 띄웁니다. |
 
 `migrate`가 `exited (0)`이고 `api`가 `healthy`면 정상입니다.

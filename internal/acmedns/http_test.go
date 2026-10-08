@@ -499,3 +499,66 @@ func TestUpdateRejectedValueIsNotAFailure(t *testing.T) {
 		t.Fatalf("bad_txt counted as failure: %+v", s)
 	}
 }
+
+func verifyReq(reg registration, remote string) req {
+	return req{method: "POST", path: "/verify", remote: remote,
+		headers: map[string]string{"X-Api-User": reg.Username, "X-Api-Key": reg.Password}}
+}
+
+// /verify는 TXT를 건드리지 않고, 맞는 자격 증명에는 호출한 IP를, 허용 IP 밖이면 그 IP와 함께 알려 준다.
+func TestVerify(t *testing.T) {
+	f := newFixture(t, fixtureOpts{})
+	reg := f.register("a.com", "10.1.0.0/16")
+
+	rec := f.do(verifyReq(reg, "10.1.2.3:4000"))
+	var ok map[string]any
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &ok) != nil || ok["ok"] != true || ok["source_ip"] != "10.1.2.3" {
+		t.Fatalf("허용 IP = %d %s", rec.Code, rec.Body)
+	}
+	if f.txtCount() != 0 {
+		t.Error("/verify가 TXT를 기록했다")
+	}
+
+	// 자격 증명이 맞고 IP만 허용 밖이면, 호출한 IP를 알려 준다.
+	expect(t, f.do(verifyReq(reg, "203.0.113.9:4000")), http.StatusForbidden, map[string]string{"error": "ip_not_allowed", "source_ip": "203.0.113.9"})
+
+	// 틀린 키는 /update처럼 401 forbidden이고, 허용 IP 여부는 알려 주지 않는다.
+	bad := verifyReq(reg, "203.0.113.9:4000")
+	bad.headers["X-Api-Key"] = "wrong"
+	expect(t, f.do(bad), http.StatusUnauthorized, map[string]string{"error": "forbidden"})
+
+	if got := f.auditActors("verify_denied", "ip_unauthorized"); len(got) != 1 {
+		t.Errorf("verify_denied(ip_unauthorized) = %v", got)
+	}
+}
+
+// /verify 거부도 /update와 같은 IP별 실패 예산을 써서, 막힌 IP는 올바른 키도 429로 끊긴다.
+func TestVerifySharesAuthFailureBudget(t *testing.T) {
+	f := newFixture(t, fixtureOpts{authFailBurst: 2})
+	reg := f.register("a.com", "10.1.0.0/16")
+	const attacker = "203.0.113.9:4000"
+	expect(t, f.do(verifyReq(reg, attacker)), http.StatusForbidden, map[string]string{"error": "ip_not_allowed", "source_ip": "203.0.113.9"})
+	bad := verifyReq(reg, attacker)
+	bad.headers["X-Api-Key"] = "wrong"
+	expect(t, f.do(bad), http.StatusUnauthorized, map[string]string{"error": "forbidden"})
+	expect(t, f.do(verifyReq(reg, attacker)), http.StatusTooManyRequests, map[string]string{"error": "too_many_attempts"})
+	// /update도 같은 예산이라 막혀 있다.
+	u := updateReq(reg, txt('a'))
+	u.remote = attacker
+	expect(t, f.do(u), http.StatusTooManyRequests, map[string]string{"error": "too_many_attempts"})
+}
+
+// /acme/ 아래 경로는 루트의 /update, /verify와 같은 동작이다. ACMEDNS_BASE_URL을 <주소>/acme로 두면 acme.sh가 이 경로를 부른다.
+func TestAcmePrefixMatchesRootPaths(t *testing.T) {
+	f := newFixture(t, fixtureOpts{})
+	reg := f.register("a.com", "10.1.0.0/16")
+
+	up := updateReq(reg, txt('a'))
+	up.path = "/acme/update"
+	up.remote = "10.1.2.3:4000"
+	expect(t, f.do(up), http.StatusOK, map[string]string{"txt": txt('a')})
+
+	ver := verifyReq(reg, "203.0.113.9:4000")
+	ver.path = "/acme/verify"
+	expect(t, f.do(ver), http.StatusForbidden, map[string]string{"error": "ip_not_allowed", "source_ip": "203.0.113.9"})
+}

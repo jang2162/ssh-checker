@@ -111,7 +111,37 @@ export interface Credentials {
   fulldomain: string;
   cname_record: string;
   allowfrom: string[];
-  acme_sh: string;
+  /** acme.sh 설치와 웹서버별 세팅 스크립트. 비밀값은 들어 있지 않고, 서버에서 실행할 때 위 값을 입력한다. */
+  setup: Setup;
+  /** true이면 키 재발급 응답이다. 세팅 스크립트를 FORCE=1로 다시 실행해야 새 키가 저장된다. */
+  rotated: boolean;
+}
+
+/** 서버에서 내려받아 실행하는 스크립트 하나. */
+export interface SetupScript {
+  id: string;
+  label: string;
+  /** 내려받는 주소(/acme/ 아래). */
+  url: string;
+  /** 서버에서 실행할 명령(내려받고 실행). */
+  cmd: string;
+  /** 스크립트 내용. 미리 읽어 볼 수 있다. */
+  script: string;
+}
+
+/** 웹서버(nginx, apache, caddy) 하나의 세팅 명령과 웹서버 설정 예. 스크립트는 같고 WEB_SERVER만 다르다. */
+export interface ServerSetup {
+  id: string;
+  label: string;
+  cmd: string;
+  config: string;
+}
+
+/** GET /api/setup. acme.sh 설치 스크립트, 세팅 스크립트, 웹서버별 실행 명령. */
+export interface Setup {
+  install: SetupScript;
+  setup: SetupScript;
+  servers: ServerSetup[];
 }
 
 export interface AuditEntry {

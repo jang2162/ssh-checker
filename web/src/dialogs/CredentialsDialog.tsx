@@ -2,6 +2,8 @@ import type { Credentials } from "../api/types.ts";
 import { CopyButton } from "../components/CopyButton.tsx";
 import { Dialog } from "../components/Dialog.tsx";
 import { Notice } from "../components/Notice.tsx";
+import { ScriptBlock } from "../components/ScriptBlock.tsx";
+import { ServerScripts } from "../components/ServerScripts.tsx";
 
 interface Props {
   kind: "enable" | "rotate";
@@ -51,18 +53,24 @@ export function CredentialsDialog({ kind, creds, onClose }: Props) {
       </section>
 
       <section className="dialog-section">
-        <h3>{kind === "enable" ? "3. " : ""}인증서를 받을 서버에서 실행</h3>
-        {kind === "rotate" && (
+        <h3>{kind === "enable" ? "3. " : ""}acme.sh 설치</h3>
+        <p>인증서를 받을 서버에서 처음 한 번만 실행합니다. 이미 설치되어 있고 3.1.4 이상이면 건너뛰세요.</p>
+        <ScriptBlock script={creds.setup.install} />
+      </section>
+
+      <section className="dialog-section">
+        <h3>{kind === "enable" ? "4. " : ""}세팅 (발급과 설치)</h3>
+        {creds.rotated && (
           <Notice kind="warning">
-            새 키를 acme.sh 설정에 저장하려면 아래 <code>--issue ... --force</code>를 서버에서 다시 실행해야 합니다. 그렇지 않으면 다음 자동 갱신이 401로 실패합니다.
+            새 키를 acme.sh 설정에 저장하려면 아래 명령을 서버에서 다시 실행해야 합니다(<code>FORCE=1</code>이 붙어 있습니다).
+            그렇지 않으면 다음 자동 갱신이 401로 실패합니다.
           </Notice>
         )}
-        <pre className="code">{creds.acme_sh}</pre>
-        <CopyButton text={creds.acme_sh} label="명령 복사" />
-        <p className="muted small-text">
-          비밀번호가 셸 기록에 남지 않게 하려면 <code>export ACMEDNS_PASSWORD=...</code> 줄 대신{" "}
-          <code>read -rs ACMEDNS_PASSWORD &amp;&amp; export ACMEDNS_PASSWORD</code>를 실행하고 비밀번호를 붙여 넣으세요.
+        <p>
+          웹서버를 고르고 명령을 실행하면 acme.sh 설치와 이 서버의 허용 IP를 확인한 뒤, 위 <strong>username, password, subdomain</strong>을 물어봅니다. password는 입력해도 보이지 않습니다.
+          스크립트에는 이 값이 들어 있지 않습니다.
         </p>
+        <ServerScripts setup={creds.setup.setup} servers={creds.setup.servers} force={creds.rotated} />
       </section>
 
       <div className="actions">

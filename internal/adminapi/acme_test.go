@@ -20,7 +20,12 @@ type credsResp struct {
 	FullDomain  string   `json:"fulldomain"`
 	CNAMERecord string   `json:"cname_record"`
 	AllowFrom   []string `json:"allowfrom"`
-	AcmeSh      string   `json:"acme_sh"`
+	Rotated     bool     `json:"rotated"`
+	Setup       struct {
+		Install struct{ URL, Cmd, Script string }
+		Setup   struct{ URL, Cmd, Script string }
+		Servers []struct{ ID, Cmd, Config string }
+	} `json:"setup"`
 }
 
 func (f *fixture) enableACME(domainID int64, body string) credsResp {
@@ -58,22 +63,21 @@ func TestEnableACME(t *testing.T) {
 		len(c.AllowFrom) != 2 || c.AllowFrom[0] != "10.0.1.0/24" || c.AllowFrom[1] != "10.0.2.5/32" {
 		t.Fatalf("creds = %+v", c)
 	}
-	for _, want := range []string{
-		`export ACMEDNS_BASE_URL="https://ssl.example.com"`,
-		`export ACMEDNS_USERNAME="` + c.Username + `"`,
-		`export ACMEDNS_PASSWORD="` + c.Password + `"`,
-		`export ACMEDNS_SUBDOMAIN="` + c.Subdomain + `"`,
-		`--set-default-ca --server letsencrypt`,
-		`--issue --dns dns_acmedns -d a.com -d '*.a.com'`,
-		`sudo mkdir -p /etc/ssl/a.com`,
-		`--install-cert -d a.com --ecc`,
-	} {
-		if !strings.Contains(c.AcmeSh, want) {
-			t.Errorf("acme_sh missing %q:\n%s", want, c.AcmeSh)
+	if c.Rotated || c.Setup.Install.URL != "https://ssl.example.com/acme/install.sh" || c.Setup.Setup.URL != "https://ssl.example.com/acme/setup.sh" ||
+		c.Setup.Install.Cmd != "curl -fsSL https://ssl.example.com/acme/install.sh -o install.sh && bash install.sh" ||
+		c.Setup.Setup.Cmd != "curl -fsSL https://ssl.example.com/acme/setup.sh -o setup.sh && bash setup.sh" || len(c.Setup.Servers) != 3 {
+		t.Fatalf("setup = %+v", c.Setup)
+	}
+	for _, sv := range c.Setup.Servers {
+		if sv.Cmd != "curl -fsSL https://ssl.example.com/acme/setup.sh -o setup.sh && WEB_SERVER="+sv.ID+" bash setup.sh" || !strings.Contains(sv.Config, "/etc/ssl/a.com/key.pem") {
+			t.Errorf("%s setup = %+v", sv.ID, sv)
 		}
 	}
-	if strings.Contains(c.AcmeSh, "--force") {
-		t.Errorf("enable script must not force:\n%s", c.AcmeSh)
+	// 비밀값은 스크립트에 들어가지 않는다. 사용자가 실행할 때 입력한다.
+	for _, secret := range []string{c.Password, c.Username, c.Subdomain} {
+		if strings.Contains(c.Setup.Setup.Script, secret) || strings.Contains(c.Setup.Install.Script, secret) {
+			t.Error("스크립트에 비밀값이 들어 있다")
+		}
 	}
 	if got := auditDetails(t, f, "acme_enable"); len(got) != 1 || got[0] != "subdomain="+c.Subdomain+" allowfrom=10.0.1.0/24,10.0.2.5/32" {
 		t.Errorf("acme_enable audit = %v", got)
@@ -100,8 +104,8 @@ func TestEnableACMEWithoutPublicURL(t *testing.T) {
 	d := f.createDomain("a.com")
 	rec := f.do(call{method: "POST", path: fmt.Sprintf("/api/domains/%d/acme", d.ID), body: `{}`, bearer: true, headers: map[string]string{"Host": "bad host"}})
 	c := decodeBody[credsResp](t, rec)
-	if !strings.Contains(c.AcmeSh, `export ACMEDNS_BASE_URL="<ssl-checker 주소>"`) {
-		t.Fatalf("acme_sh = %s", c.AcmeSh)
+	if !strings.HasPrefix(c.Setup.Install.Cmd, "curl -fsSL <ssl-checker 주소>/acme/install.sh") {
+		t.Fatalf("setup = %+v", c.Setup)
 	}
 }
 
@@ -117,10 +121,8 @@ func TestRotateKeepsSubdomain(t *testing.T) {
 	if c.Username != old.Username || c.Subdomain != old.Subdomain || c.CNAMERecord != old.CNAMERecord || c.Password == old.Password {
 		t.Fatalf("rotated = %+v, old = %+v", c, old)
 	}
-	for _, want := range []string{"--issue --dns dns_acmedns -d a.com -d '*.a.com' --force\n", "sudo mkdir -p /etc/ssl/a.com"} {
-		if !strings.Contains(c.AcmeSh, want) {
-			t.Errorf("rotate script missing %q:\n%s", want, c.AcmeSh)
-		}
+	if !c.Rotated {
+		t.Errorf("rotate 응답은 rotated=true여야 한다: %+v", c)
 	}
 	ctx := context.Background()
 	if _, err := f.svc.Authenticate(ctx, old.Username, old.Password); !errors.Is(err, acmedns.ErrForbidden) {
@@ -210,5 +212,47 @@ func TestDisableACME(t *testing.T) {
 		if !contains(actions, want) {
 			t.Errorf("audit missing %s: %v", want, actions)
 		}
+	}
+}
+
+// 설치·세팅 스크립트의 안내는 로그인 없이 볼 수 있고, 내려받는 파일에는 비밀값이 없다.
+func TestSetupIsPublic(t *testing.T) {
+	f := newFixture(t)
+	d := f.createDomain("a.com")
+	c := f.enableACME(d.ID, `{}`)
+	rec := f.get("/api/setup")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("setup = %d %s", rec.Code, rec.Body)
+	}
+	for _, secret := range []string{c.Password, c.Username, c.Subdomain, "a.com"} {
+		if strings.Contains(rec.Body.String(), secret) {
+			t.Errorf("공개 안내에 %q가 있다", secret)
+		}
+	}
+	got := decodeBody[struct {
+		Install struct{ Cmd, Script string }
+		Setup   struct{ Script string }
+		Servers []struct{ ID, Config string }
+	}](t, rec)
+	if !strings.Contains(got.Install.Script, "https://get.acme.sh") || !strings.Contains(got.Setup.Script, "verify_server") ||
+		len(got.Servers) != 3 || !strings.Contains(got.Servers[0].Config, "<CERT_DIR>/key.pem") {
+		t.Fatalf("setup = %+v", got)
+	}
+}
+
+// /acme/install.sh, /acme/setup.sh는 스크립트 파일을 텍스트로 내려준다. /acme/update는 그대로 POST 전용이다.
+func TestScriptDownload(t *testing.T) {
+	f := newFixture(t)
+	for _, name := range []string{"install.sh", "setup.sh"} {
+		rec := f.do(call{method: "GET", path: "/acme/" + name})
+		if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/plain") || !strings.HasPrefix(rec.Body.String(), "#!/usr/bin/env bash") {
+			t.Errorf("%s = %d %q %.40q", name, rec.Code, rec.Header().Get("Content-Type"), rec.Body)
+		}
+	}
+	if rec := f.do(call{method: "GET", path: "/acme/setup.sh"}); !strings.Contains(rec.Body.String(), `"ssl-checker 주소" "http://example.com"`) {
+		t.Errorf("내려받은 주소(Host)가 기본값이 아니다: %s", rec.Body)
+	}
+	if rec := f.do(call{method: "GET", path: "/acme/evil.sh"}); rec.Code != http.StatusNotFound {
+		t.Errorf("없는 파일 = %d", rec.Code)
 	}
 }

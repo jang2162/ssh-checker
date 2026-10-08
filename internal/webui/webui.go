@@ -51,10 +51,10 @@ type handler struct {
 // reserved는 서버 API가 맡는 경로다. 화면이 가로채면 안 된다(GET /update의 405 같은 기존 응답이 달라진다).
 func reserved(p string) bool {
 	switch p {
-	case "/update", "/register", "/health", "/llms.txt", "/api":
+	case "/update", "/verify", "/register", "/health", "/llms.txt", "/api":
 		return true
 	}
-	return strings.HasPrefix(p, "/api/")
+	return strings.HasPrefix(p, "/api/") || strings.HasPrefix(p, "/acme/")
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {

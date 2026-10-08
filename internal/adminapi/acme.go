@@ -2,7 +2,6 @@ package adminapi
 
 import (
 	"errors"
-	"fmt"
 	"net/http"
 	"net/netip"
 	"strings"
@@ -98,7 +97,10 @@ type credentials struct {
 	FullDomain  string   `json:"fulldomain"`
 	CNAMERecord string   `json:"cname_record"`
 	AllowFrom   []string `json:"allowfrom"`
-	AcmeSh      string   `json:"acme_sh"`
+	// Setup은 acme.sh 설치와 웹서버별 세팅 스크립트다. 비밀값은 들어 있지 않고, 실행할 때 위 값을 입력한다.
+	Setup setupInfo `json:"setup"`
+	// Rotated이면 키를 재발급한 응답이다. 서버에서 세팅 스크립트를 FORCE=1로 다시 실행해야 새 키가 저장된다.
+	Rotated bool `json:"rotated"`
 }
 
 // writeCredentials는 일회성 자격 증명이다. 비밀번호는 이 응답에만 나오므로 캐시하지 않게 한다.
@@ -111,36 +113,12 @@ func (a *API) writeCredentials(w http.ResponseWriter, r *http.Request, status in
 	if base == "" {
 		base = "<ssl-checker 주소>"
 	}
+	setup := buildSetup(base, "/etc/ssl/"+fqdn)
 	w.Header().Set("Cache-Control", "no-store")
 	httpx.WriteJSON(w, status, credentials{
 		Username: reg.Username, Password: reg.Password, Subdomain: reg.Subdomain, FullDomain: reg.FullDomain,
-		CNAMERecord: cnameRecord(fqdn, reg.FullDomain), AllowFrom: allow, AcmeSh: acmeSh(base, fqdn, reg, rotated),
+		CNAMERecord: cnameRecord(fqdn, reg.FullDomain), AllowFrom: allow, Setup: setup, Rotated: rotated,
 	})
-}
-
-// acmeSh는 대상 서버에서 그대로 붙여 넣을 acme.sh 명령이다(acme.sh 3.1.4 이상).
-// rotated이면 이미 인증서가 있어 --issue가 "Skipping"으로 끝나므로 --force로 다시 발급해 새 키를 도메인 설정에 저장한다.
-func acmeSh(baseURL, fqdn string, reg acmedns.Registration, rotated bool) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "export ACMEDNS_BASE_URL=%q\n", baseURL)
-	fmt.Fprintf(&b, "export ACMEDNS_USERNAME=%q\n", reg.Username)
-	fmt.Fprintf(&b, "export ACMEDNS_PASSWORD=%q\n", reg.Password)
-	fmt.Fprintf(&b, "export ACMEDNS_SUBDOMAIN=%q\n", reg.Subdomain)
-	b.WriteString("~/.acme.sh/acme.sh --set-default-ca --server letsencrypt\n")
-	issue := fmt.Sprintf("~/.acme.sh/acme.sh --issue --dns dns_acmedns -d %s -d '*.%s'", fqdn, fqdn)
-	if rotated {
-		b.WriteString("# 이미 발급된 인증서가 있어도 --force로 다시 발급해야 새 키가 도메인 설정에 저장된다\n")
-		issue += " --force"
-	} else {
-		b.WriteString("# 처음 연결하는 도메인은 --issue에 --staging을 붙여 먼저 확인한다\n")
-	}
-	b.WriteString(issue + "\n")
-	fmt.Fprintf(&b, "sudo mkdir -p /etc/ssl/%s\n", fqdn)
-	fmt.Fprintf(&b, "~/.acme.sh/acme.sh --install-cert -d %s --ecc \\\n", fqdn)
-	fmt.Fprintf(&b, "  --key-file /etc/ssl/%s/key.pem \\\n", fqdn)
-	fmt.Fprintf(&b, "  --fullchain-file /etc/ssl/%s/fullchain.pem \\\n", fqdn)
-	b.WriteString("  --reloadcmd \"sudo systemctl reload nginx\"\n")
-	return b.String()
 }
 
 type allowFromRequest struct {

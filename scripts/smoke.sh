@@ -39,6 +39,23 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/update" -H "X-Api-U
   -d "{\"subdomain\":\"$sub\",\"txt\":\"$txt\"}")
 [ "$code" = 401 ] || { echo "wrong key returned $code" >&2; exit 1; }
 
+# 인증서를 받는 서버용 경로는 /acme/ 아래에서도 같은 동작이다. verify는 TXT를 건드리지 않는다.
+resp=$(curl -fsS -X POST "$BASE/acme/update" -H "X-Api-User: $user" -H "X-Api-Key: $pass" \
+  -d "{\"subdomain\":\"$sub\",\"txt\":\"$txt\"}")
+echo "$resp" | grep -q "\"txt\":\"$txt\"" || { echo "unexpected /acme/update response: $resp" >&2; exit 1; }
+resp=$(curl -fsS -X POST "$BASE/acme/verify" -H "X-Api-User: $user" -H "X-Api-Key: $pass")
+echo "$resp" | grep -q '"ok":true' || { echo "unexpected /acme/verify response: $resp" >&2; exit 1; }
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/acme/verify" -H "X-Api-User: $user" -H "X-Api-Key: wrong")
+[ "$code" = 401 ] || { echo "verify with wrong key returned $code" >&2; exit 1; }
+# 로그인 없이 내려받는 설치·세팅 스크립트: 셸 문법이 맞고, 비밀값이 없다.
+for f in install.sh setup.sh; do
+  curl -fsS "$BASE/acme/$f" -o "/tmp/smoke-$f"
+  bash -n "/tmp/smoke-$f" || { echo "/acme/$f is not valid shell" >&2; exit 1; }
+  ! grep -q "$pass" "/tmp/smoke-$f" || { echo "/acme/$f contains the password" >&2; exit 1; }
+done
+grep -q "verify_server" /tmp/smoke-setup.sh || { echo "/acme/setup.sh missing verify step" >&2; exit 1; }
+rm -f /tmp/smoke-install.sh /tmp/smoke-setup.sh
+
 summary=$(curl -fsS "$BASE/api/summary")
 echo "$summary" | grep -q '"domains":1' || { echo "unexpected summary: $summary" >&2; exit 1; }
 domains=$(curl -fsS "$BASE/api/domains")
@@ -88,6 +105,8 @@ code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/assets/missing.js")
 [ "$code" = 404 ] || { echo "missing asset returned $code" >&2; exit 1; }
 code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/update")
 [ "$code" = 405 ] || { echo "GET /update returned $code (화면이 API 경로를 가로챘다)" >&2; exit 1; }
+code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/acme/update")
+[ "$code" = 405 ] || { echo "GET /acme/update returned $code" >&2; exit 1; }
 llms=$(curl -fsS "$BASE/llms.txt")
 echo "$llms" | grep -q "챌린지 존: $CHALLENGE_ZONE" || { echo "llms.txt missing zone" >&2; exit 1; }
 echo "$llms" | grep -q "$BASE/api/domains" || { echo "llms.txt missing base url" >&2; exit 1; }

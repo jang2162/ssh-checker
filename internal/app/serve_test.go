@@ -35,6 +35,15 @@ func TestServeHandlerKeepsAPIPathsAheadOfTheUI(t *testing.T) {
 	if rec.Code != http.StatusMethodNotAllowed || !strings.Contains(rec.Header().Get("Allow"), "POST") {
 		t.Fatalf("GET /update = %d allow=%q", rec.Code, rec.Header().Get("Allow"))
 	}
+	// 인증서를 받는 서버용 경로는 /acme/ 아래에서도 같은 핸들러가 받는다(화면 폴백으로 가지 않는다).
+	for _, p := range []string{"/acme/update", "/acme/verify", "/update", "/verify"} {
+		if rec := get(h, "GET", p); rec.Code != http.StatusMethodNotAllowed || !strings.Contains(rec.Header().Get("Allow"), "POST") {
+			t.Fatalf("GET %s = %d allow=%q", p, rec.Code, rec.Header().Get("Allow"))
+		}
+		if rec := get(h, "POST", p); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("POST %s without credentials = %d %s", p, rec.Code, rec.Body)
+		}
+	}
 	rec = get(h, "GET", "/api/nope")
 	if rec.Code != http.StatusNotFound || !strings.HasPrefix(rec.Header().Get("Content-Type"), "application/json") {
 		t.Fatalf("GET /api/nope = %d %q", rec.Code, rec.Header().Get("Content-Type"))

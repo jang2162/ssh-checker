@@ -10,6 +10,7 @@ export function Layout() {
           <Link to="/" className="brand">ssl-checker</Link>
           <nav aria-label="주 메뉴">
             <NavLink to="/" end>대시보드</NavLink>
+            <NavLink to="/guide">이용 방법</NavLink>
             {admin && <NavLink to="/audit">감사 로그</NavLink>}
           </nav>
           <div className="spacer" />

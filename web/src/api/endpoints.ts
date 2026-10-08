@@ -8,6 +8,7 @@ import type {
   Credentials,
   DomainDetail,
   DomainSummary,
+  Setup,
   Summary,
   Target,
   TargetInput,
@@ -18,6 +19,7 @@ export function createApi(c: Client) {
   return {
     summary: () => c.get<Summary>("/api/summary"),
     config: () => c.get<Config>("/api/config"),
+    setup: () => c.get<Setup>("/api/setup"),
     codes: () => c.get<{ codes: CodeInfo[] }>("/api/codes").then((r) => r.codes),
     domains: () => c.get<{ domains: DomainSummary[] }>("/api/domains").then((r) => r.domains),
     domain: (id: number) => c.get<DomainDetail>(`/api/domains/${id}`),

@@ -5,6 +5,7 @@ import { AppProvider } from "./app/context.tsx";
 import { Layout } from "./components/Layout.tsx";
 import { AdminLogin } from "./pages/AdminLogin.tsx";
 import { Audit } from "./pages/Audit.tsx";
+import { Guide } from "./pages/Guide.tsx";
 import { Dashboard } from "./pages/Dashboard.tsx";
 import { DomainDetail } from "./pages/DomainDetail.tsx";
 import { NotFound } from "./pages/NotFound.tsx";
@@ -18,6 +19,7 @@ createRoot(document.getElementById("root")!).render(
           <Route element={<Layout />}>
             <Route index element={<Dashboard />} />
             <Route path="domains/:id" element={<DomainDetail />} />
+            <Route path="guide" element={<Guide />} />
             <Route path="audit" element={<Audit />} />
             <Route path="admin" element={<AdminLogin />} />
             <Route path="*" element={<NotFound />} />

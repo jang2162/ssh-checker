@@ -4,16 +4,20 @@
 
 | 메서드 | 경로 | 호출 주체 | 인증 |
 | --- | --- | --- | --- |
-| `POST` | `/update` | 각 서버의 acme.sh (`dns_acmedns`) | `X-Api-User`, `X-Api-Key` |
+| `POST` | `/acme/update` (옛 `/update`) | 각 서버의 acme.sh (`dns_acmedns`) | `X-Api-User`, `X-Api-Key` |
+| `POST` | `/acme/verify` (옛 `/verify`) | 세팅 스크립트(사전 점검) | `X-Api-User`, `X-Api-Key` |
+| `GET` | `/acme/install.sh`, `/acme/setup.sh` | 인증서를 받을 서버 | 없음 |
 | `POST` | `/register` | 관리자 | `Authorization: Bearer <ADMIN_KEY>` |
 | `GET` | `/health` | 모니터링, 컨테이너 헬스체크 | 없음 |
 
-## POST /update
+인증서를 받는 서버가 부르는 경로는 `/acme/*` 하나에 모여 있습니다(API는 `update`, `verify`, 스크립트는 `install.sh`, `setup.sh`). 리버스 프록시에서 이 접두사만 바깥에 열면 되고, 나머지(`/api/*`, 화면, `/register`)는 내부망에 둘 수 있습니다. acme.sh에는 `ACMEDNS_BASE_URL=<주소>/acme`를 주면 `/acme/update`를 부릅니다(세팅 스크립트가 이렇게 정합니다). 루트의 `/update`, `/verify`는 기존 설정을 위해 같은 동작으로 남아 있습니다.
+
+## POST /acme/update
 
 챌린지 TXT 값을 갱신합니다. 요청·응답 형식이 acme-dns의 `/update`와 같습니다. acme.sh `dns_acmedns`로 동작을 확인했습니다. lego나 certbot의 acme-dns 연동도 같은 형식을 쓰지만, 이들은 계정을 직접 `/register`하려 할 수 있습니다. 그럴 때는 미리 등록한 자격 증명을 쓰도록 설정해야 하며, 아직 검증하지 않았습니다.
 
 ```http
-POST /update
+POST /acme/update
 X-Api-User: c36f50e8-4632-44f0-83fe-e070fef28a10
 X-Api-Key: <등록 때 받은 password>
 Content-Type: application/json
@@ -198,11 +202,36 @@ ACME가 꺼진 도메인에 수정·재발급·확인·끄기를 부르면 409 `
   "fulldomain": "<uuid>.acme.example.com",
   "cname_record": "_acme-challenge.a.com. CNAME <uuid>.acme.example.com.",
   "allowfrom": ["10.0.1.0/24"],
-  "acme_sh": "export ACMEDNS_BASE_URL=\"https://...\"\n..."
+  "setup": {
+    "install": {"id": "install", "label": "acme.sh 설치", "url": "https://.../acme/install.sh", "cmd": "curl -fsSL ... -o install.sh && bash install.sh", "script": "#!/usr/bin/env bash\n..."},
+    "setup": {"id": "setup", "label": "세팅", "url": "https://.../acme/setup.sh", "cmd": "curl -fsSL ... -o setup.sh && bash setup.sh", "script": "#!/usr/bin/env bash\n..."},
+    "servers": [{"id": "nginx", "label": "nginx", "cmd": "curl -fsSL ... -o setup.sh && WEB_SERVER=nginx bash setup.sh", "config": "ssl_certificate ...;"}]
+  },
+  "rotated": false
 }
 ```
 
-`acme_sh`는 대상 서버에서 그대로 붙여 넣을 환경변수와 acme.sh 발급·설치 명령입니다. `ACMEDNS_BASE_URL`은 `PUBLIC_URL`(없으면 요청 주소)입니다. 키 재발급(`rotate`) 응답의 스크립트는 `--issue`에 `--force`가 붙습니다. 이미 인증서가 있어도 다시 발급해야 새 키가 도메인 설정에 저장되기 때문입니다.
+`setup`은 acme.sh 설치 스크립트(`install`), 세팅 스크립트(`setup`)의 내려받기 주소, 실행 명령(`cmd`), 내용(`script`)과, 웹서버(`nginx`, `apache`, `caddy`)별 실행 명령과 웹서버 설정 예(`config`)입니다. 세팅 스크립트는 하나이고 웹서버는 `WEB_SERVER`로 고릅니다. **스크립트에는 `password` 같은 비밀값이 없습니다.** 서버에서 실행할 때 `username`, `password`, `subdomain`을 입력하거나 환경변수로 넘깁니다. 주소는 `PUBLIC_URL`(없으면 요청 주소) 기준입니다. 키 재발급(`rotate`) 응답은 `rotated: true`이고, 이미 인증서가 있어도 새 키가 도메인 설정에 저장되도록 서버에서 세팅 스크립트를 `FORCE=1`로 다시 실행해야 합니다(예: `FORCE=1 WEB_SERVER=nginx bash setup.sh`).
+
+### 설치·세팅 스크립트
+
+- `GET /acme/install.sh`, `GET /acme/setup.sh`: 스크립트 파일(`text/plain`). 로그인 없이 받을 수 있고 비밀값이 없습니다.
+- `GET /api/setup`: 위 스크립트의 내용과 실행 명령, 웹서버 설정 예(JSON).
+
+세팅 스크립트는 먼저 acme.sh가 3.1.4 이상으로 설치되어 있는지 확인하고, 입력한 자격 증명으로 `POST /acme/verify`를 불러 **자격 증명과 이 서버의 IP가 허용 목록(`allowfrom`)에 있는지** 확인한 뒤 발급합니다.
+
+## POST /acme/verify
+
+세팅 전에 쓰는 사전 점검입니다. `/acme/update`와 같은 인증과 허용 IP 검사를 하지만 TXT는 건드리지 않습니다.
+
+| 응답 | 뜻 |
+| --- | --- |
+| 200 `{"ok":true,"source_ip":"<호출한 IP>","fulldomain":"..."}` | 자격 증명이 맞고 허용 IP입니다 |
+| 401 `forbidden` | username이나 password가 틀렸습니다 |
+| 403 `ip_not_allowed` + `source_ip` | 자격 증명은 맞지만 이 IP가 허용 목록에 없습니다 |
+| 429 `too_many_attempts` | 이 IP의 인증 실패가 너무 많습니다 |
+
+거부는 `/acme/update`와 같은 IP별 실패 횟수를 씁니다. 감사 로그에는 `verify_denied`로 남습니다.
 
 ### 감사 로그
 

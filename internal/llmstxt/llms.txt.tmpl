@@ -10,7 +10,7 @@
 ## 동작 방식
 
 1. 도메인마다 `_acme-challenge.<도메인>`에 CNAME을 **한 번** 등록합니다. 대상은 이 서버가 정해 주는 `<uuid>.{{.Zone}}`입니다. 도메인의 DNS는 이 한 줄 말고는 건드리지 않습니다.
-2. 인증서를 받을 서버에서 acme.sh가 Let's Encrypt에서 받은 TXT 값을 이 서버의 `/update`로 보냅니다. acme.sh의 `dns_acmedns` 플러그인이 알아서 합니다.
+2. 인증서를 받을 서버에서 acme.sh가 Let's Encrypt에서 받은 TXT 값을 이 서버의 `/acme/update`로 보냅니다(옛 `/update`도 같은 동작입니다). acme.sh의 `dns_acmedns` 플러그인이 알아서 합니다.
 3. 이 서버가 `<uuid>.{{.Zone}}`에 TXT를 기록합니다(최근 값 2개 유지: `a.com`과 `*.a.com`을 한 인증서로 받을 때 둘 다 필요합니다). Let's Encrypt가 CNAME을 따라가 TXT를 확인합니다.
 4. 인증서와 개인키는 각 서버의 acme.sh가 만들고 보관합니다. 이 서버는 개인키를 보지 않습니다.
 
@@ -47,13 +47,13 @@ curl -sS -X POST {{.BaseURL}}/api/domains -H "$A" -H "$J" -d '{"fqdn":"a.com"}'
 curl -sS -X POST {{.BaseURL}}/api/domains/<id>/acme -H "$A" -H "$J" -d '{"allowfrom":["203.0.113.10/32"]}'
 ```
 
-`allowfrom`은 `/update`를 부를 수 있는 서버의 IP나 CIDR입니다(최대 64개). 키가 새어도 다른 곳에서는 못 쓰게 가능한 한 지정합니다. 빈 목록 `[]`이면 어디서든 부를 수 있습니다.
+`allowfrom`은 `/acme/update`를 부를 수 있는 서버의 IP나 CIDR입니다(최대 64개). 키가 새어도 다른 곳에서는 못 쓰게 가능한 한 지정합니다. 빈 목록 `[]`이면 어디서든 부를 수 있습니다.
 
-응답(201)에는 `username`, `password`, `subdomain`, `fulldomain`, `cname_record`, `allowfrom`, `acme_sh`가 있습니다.
+응답(201)에는 `username`, `password`, `subdomain`, `fulldomain`, `cname_record`, `allowfrom`, `setup`(설치·세팅 명령), `rotated`가 있습니다.
 
 - **`password`는 이 응답에서만 볼 수 있습니다.** 다시 얻을 방법이 없고, 잃어버리면 키를 재발급합니다.
 - 응답을 로그, 티켓, 채팅에 남기지 마세요.
-- `acme_sh`는 3~4단계에서 쓸 명령입니다.
+- `setup`의 스크립트에는 비밀값이 들어 있지 않습니다. 4단계에서 `username`, `password`, `subdomain`을 환경변수로 넘깁니다.
 - 이미 켜져 있으면 409 `acme_enabled`입니다.
 
 ### 3. CNAME 등록과 확인
@@ -81,41 +81,38 @@ curl -sS -X POST {{.BaseURL}}/api/domains/<id>/acme/check -H "$A" -H "$J"
 
 ### 4. 인증서를 받을 서버에서 발급
 
-acme.sh 3.1.4 이상이 필요합니다. 없으면 `curl https://get.acme.sh | sh -s email=<연락 이메일>`로 설치합니다. 2단계 응답의 `acme_sh` 필드에 비밀번호를 평문으로 넣은 `export ACMEDNS_PASSWORD="..."` 명령과 운영 `--issue` 줄이 들어 있습니다(아래 스테이징 단계는 별도입니다).
+인증서를 받는 서버가 쓰는 API와 스크립트는 모두 `{{.BaseURL}}/acme/*` 아래에 있습니다(`/acme/update`, `/acme/verify`, `/acme/install.sh`, `/acme/setup.sh`). 스크립트는 이 서버가 내려주고, **비밀값이 없으며** 실행할 때 값을 받습니다. 스크립트가 `ACMEDNS_BASE_URL={{.BaseURL}}/acme`로 정해 줍니다.
+
+먼저 acme.sh를 설치합니다(서버마다 한 번. 3.1.4 이상이 이미 있으면 건너뜁니다).
 
 ```sh
-export ACMEDNS_BASE_URL="{{.BaseURL}}"
-export ACMEDNS_USERNAME="<username>"
-export ACMEDNS_PASSWORD="<password>"
-export ACMEDNS_SUBDOMAIN="<subdomain>"
-~/.acme.sh/acme.sh --set-default-ca --server letsencrypt
+curl -fsSL {{.BaseURL}}/acme/install.sh -o install.sh && ACME_EMAIL=<연락 이메일> bash install.sh
 ```
 
-- 사람이 대화형 셸에서 작업한다면 `read -rs ACMEDNS_PASSWORD && export ACMEDNS_PASSWORD`로 받아 비밀번호가 셸 기록에 남지 않게 할 수 있습니다. 에이전트의 셸에는 TTY가 없으므로 `read`를 쓰면 안 됩니다(빈 값이 되어 `/update`가 401로 실패합니다).
-- 위 `export` 줄들과 이어지는 `acme.sh` 명령은 같은 셸 세션에서 실행해야 합니다. 블록마다 새 셸을 열면 export한 값이 사라집니다.
-- 비밀번호를 로그에 남기지 않는 규칙은 그대로입니다.
-
-처음 연결하는 도메인은 **스테이징으로 먼저** 확인합니다. 운영 CA의 발급 횟수 제한에 걸리지 않습니다.
+다음에 세팅 스크립트 `setup.sh`를 내려받아 실행합니다. 웹서버는 `WEB_SERVER`(`nginx`, `apache`, `caddy`, 기본 `nginx`)로 고릅니다.
 
 ```sh
-~/.acme.sh/acme.sh --issue --staging --dns dns_acmedns -d a.com -d '*.a.com'
+curl -fsSL {{.BaseURL}}/acme/setup.sh -o setup.sh
+ACMEDNS_USERNAME=<username> ACMEDNS_PASSWORD=<password> ACMEDNS_SUBDOMAIN=<subdomain> \
+  WEB_SERVER=nginx DOMAIN=a.com CERT_DIR=/etc/ssl/a.com bash setup.sh
+```
+
+- 터미널이 없는 에이전트 셸에서는 값을 **환경변수로 넘겨야** 합니다. 환경변수가 있는 값은 묻지 않고, 기본값이 있는 값(`SSLCHK_URL`, `WEB_SERVER`, `CERT_DIR`, `RELOAD_CMD`, caddy는 `CERT_GROUP`)은 생략할 수 있습니다. 사람이 터미널에서 실행하면 하나씩 물어보고, password는 화면에 보이지 않습니다.
+- 스크립트는 발급 전에 **acme.sh가 3.1.4 이상으로 설치되어 있는지**, 그리고 **입력한 자격 증명과 이 서버의 IP가 허용 목록에 있는지** 확인합니다(`POST {{.BaseURL}}/acme/verify`). 설치가 안 되어 있으면 설치 명령을, 허용 IP가 아니면 이 서버의 IP를 알려 주고 멈춥니다. 그 IP를 `allowfrom`에 추가한 뒤 다시 실행합니다(`PATCH /api/domains/<id>/acme`).
+- 확인이 끝나면 `--issue`, `--install-cert`까지 실행합니다. `RELOAD_CMD`(웹서버 reload)와 `CERT_DIR`(인증서 저장 경로)는 웹서버별 기본값이 있습니다.
+- 비밀번호를 로그, 티켓, 채팅에 남기지 마세요. 환경변수를 명령 앞에 붙이면 셸 기록에 남을 수 있으니, 대화형이면 입력으로 받는 편이 안전합니다.
+
+처음 연결하는 도메인은 **스테이징으로 먼저** 확인하면 운영 CA의 발급 횟수 제한에 걸리지 않습니다. 이 확인은 스크립트를 실행하기 전에 합니다.
+
+```sh
+ACMEDNS_BASE_URL={{.BaseURL}}/acme ACMEDNS_USERNAME=<username> ACMEDNS_PASSWORD=<password> ACMEDNS_SUBDOMAIN=<subdomain> \
+  ~/.acme.sh/acme.sh --issue --staging --dns dns_acmedns -d a.com -d '*.a.com'
 # "Cert success."가 나오면 스테이징 인증서를 지운다
 ~/.acme.sh/acme.sh --remove -d a.com --ecc
 rm -rf ~/.acme.sh/a.com_ecc
 ```
 
-운영 발급과 설치입니다.
-
-```sh
-~/.acme.sh/acme.sh --issue --dns dns_acmedns -d a.com -d '*.a.com'
-sudo mkdir -p /etc/ssl/a.com
-~/.acme.sh/acme.sh --install-cert -d a.com --ecc \
-  --key-file       /etc/ssl/a.com/key.pem \
-  --fullchain-file /etc/ssl/a.com/fullchain.pem \
-  --reloadcmd      "sudo systemctl reload nginx"
-```
-
-갱신은 acme.sh가 설치한 cron이 알아서 합니다. 처음 발급이 끝나면 자격 증명이 acme.sh 설정에 저장되므로, 환경변수는 다시 설정하지 않아도 됩니다.
+갱신은 acme.sh가 설치한 cron이 알아서 합니다. 처음 발급이 끝나면 자격 증명이 acme.sh 설정에 저장되므로, 이후에는 환경변수가 필요 없습니다.
 
 ### 5. 확인과 모니터링 등록
 
@@ -144,7 +141,7 @@ curl -sS -X POST {{.BaseURL}}/api/domains/<id>/targets -H "$A" -H "$J" \
 | 허용 IP 변경 | `PATCH /api/domains/<id>/acme` `{"allowfrom":["203.0.113.0/24"]}` |
 | 끄기 | `DELETE /api/domains/<id>/acme` (204). 챌린지 TXT를 지웁니다. 다시 켜면 서브도메인이 새로 생겨 CNAME을 다시 걸어야 합니다 |
 
-**키를 재발급하면 서버에서 `--issue ... --force`를 다시 실행해야 합니다.** 재발급 응답의 `acme_sh`에 들어 있습니다. 그렇게 하지 않으면 acme.sh 설정에 옛 키가 남아, 다음 자동 갱신이 401로 실패합니다.
+**키를 재발급하면 서버에서 세팅 스크립트를 `FORCE=1`로 다시 실행해야 합니다**(예: `FORCE=1 WEB_SERVER=nginx bash setup.sh`). 새 `password`를 넘기면 `--issue --force`로 새 키가 acme.sh 설정에 저장됩니다. 그렇게 하지 않으면 acme.sh 설정에 옛 키가 남아, 다음 자동 갱신이 401로 실패합니다.
 
 ## 상태 판정
 
@@ -158,11 +155,11 @@ curl -sS -X POST {{.BaseURL}}/api/domains/<id>/targets -H "$A" -H "$J" \
 
 ## 흔한 오류와 해결
 
-- **`/update`가 401 `forbidden`:** username이나 password가 틀렸거나, 키를 재발급한 뒤 옛 키를 쓰고 있거나, 호출한 서버의 IP가 `allowfrom`에 없을 때입니다. ACME를 끈 도메인의 계정도 401입니다. 이 서버가 프록시 뒤에 있으면 관리자에게 `TRUSTED_PROXIES` 설정을 확인해 달라고 합니다.
-- **`/update`가 400 `bad_txt`:** TXT 값이 43자 `[A-Za-z0-9_-]` 형식이 아닙니다. acme.sh가 아닌 도구로 직접 호출했을 때 생깁니다.
-- **`/update`가 429 `rate_limited`:** 계정별 호출 빈도 제한입니다(처음 10번, 이후 6초에 1번). 잠시 뒤 다시 시도합니다.
-- **`/update`가 429 `too_many_attempts`:** 이 IP에서 인증 실패가 너무 많았습니다. 자격 증명을 고치고 잠시 기다립니다.
-- **`/update`가 500 `dns_provider_error`:** 이 서버가 DNS 공급자를 호출하지 못했습니다. 서버 관리자에게 `{{.BaseURL}}/health`를 확인해 달라고 합니다.
+- **`/acme/update`(옛 `/update`)가 401 `forbidden`:** username이나 password가 틀렸거나, 키를 재발급한 뒤 옛 키를 쓰고 있거나, 호출한 서버의 IP가 `allowfrom`에 없을 때입니다. 어느 쪽인지는 `POST {{.BaseURL}}/acme/verify`(같은 헤더)로 알 수 있습니다. 허용 IP 밖이면 403 `ip_not_allowed`와 이 서버의 `source_ip`를 돌려줍니다. ACME를 끈 도메인의 계정도 401입니다. 이 서버가 프록시 뒤에 있으면 관리자에게 `TRUSTED_PROXIES` 설정을 확인해 달라고 합니다.
+- **`/acme/update`가 400 `bad_txt`:** TXT 값이 43자 `[A-Za-z0-9_-]` 형식이 아닙니다. acme.sh가 아닌 도구로 직접 호출했을 때 생깁니다.
+- **`/acme/update`가 429 `rate_limited`:** 계정별 호출 빈도 제한입니다(처음 10번, 이후 6초에 1번). 잠시 뒤 다시 시도합니다.
+- **`/acme/update`가 429 `too_many_attempts`:** 이 IP에서 인증 실패가 너무 많았습니다. 자격 증명을 고치고 잠시 기다립니다.
+- **`/acme/update`가 500 `dns_provider_error`:** 이 서버가 DNS 공급자를 호출하지 못했습니다. 서버 관리자에게 `{{.BaseURL}}/health`를 확인해 달라고 합니다.
 - **Let's Encrypt 검증 실패:** `acme/check`로 `cname_status`가 `ok`인지 먼저 봅니다. 도메인에 CAA 레코드가 있으면 `letsencrypt.org`를 허용해야 합니다.
 - **`CNAME_MISMATCH`:** ACME를 껐다 다시 켜면 서브도메인이 바뀝니다. 새 `cname_record`의 값으로 CNAME을 고칩니다.
 - **acme.sh가 "Skipping. Next renewal time is"를 출력:** 이미 발급된 인증서가 있어서 건너뛴 것입니다. 새 키를 저장해야 하면 `--force`를 붙입니다.

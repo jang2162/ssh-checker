@@ -25,16 +25,22 @@ func TestRenderFillsServerValues(t *testing.T) {
 		"챌린지 존: acme.example.com",
 		"curl -sS -X POST https://ssl.example.com/api/domains ",
 		"_acme-challenge.a.com.  CNAME  <uuid>.acme.example.com.",
-		`export ACMEDNS_BASE_URL="https://ssl.example.com"`,
-		`export ACMEDNS_PASSWORD="<password>"`,
+		"curl -fsSL https://ssl.example.com/acme/install.sh -o install.sh",
+		"curl -fsSL https://ssl.example.com/acme/setup.sh -o setup.sh",
+		"WEB_SERVER=nginx",
+		"ACMEDNS_BASE_URL=https://ssl.example.com/acme",
+		"POST https://ssl.example.com/acme/verify",
+		"FORCE=1",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q", want)
 		}
 	}
-	// read는 TTY가 없는 에이전트 셸에서 실패하므로 주 안내 줄이 아니다(대화형 대안은 설명에만 나온다).
-	if strings.Contains(out, "\nread -rs ACMEDNS_PASSWORD && export") {
-		t.Error("read -rs must not be the primary instruction line")
+	// 스크립트에는 비밀값이 없고, 환경변수로 넘기는 방식만 안내한다.
+	for _, bad := range []string{`export ACMEDNS_PASSWORD="`, "acme_sh"} {
+		if strings.Contains(out, bad) {
+			t.Errorf("옛 방식 안내가 남아 있다: %q", bad)
+		}
 	}
 	if strings.Contains(out, "{{") || strings.Contains(out, "<ssl-checker 주소>") {
 		t.Errorf("unfilled template: %q", out)
