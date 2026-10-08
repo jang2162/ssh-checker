@@ -60,9 +60,9 @@ export function CredentialsDialog({ kind, creds, onClose }: Props) {
           </Notice>
         )}
         <p>
-          명령을 실행하면 위 <strong>username, password</strong>를 물어보고(subdomain은 서버가 알려 주므로 입력하지 않습니다), 이 서버의 허용 IP, acme.sh 설치(없으면 설치), 웹서버 종류와 설치 위치,
-          도메인의 CNAME 등록 여부, 인증서 저장 경로를 차례로 확인합니다. 웹서버가 감지되지 않거나 직접 reload하려면 <code>manual</code>을 골라 reload 스크립트를 입력하세요.
+          실행하면 <strong>username, password</strong>를 물어봅니다. 허용 IP, acme.sh, 웹서버, CNAME, 저장 경로는 스크립트가 확인합니다.
         </p>
+        <p className="muted small-text">웹서버가 감지되지 않으면 <code>manual</code>을 골라 reload 스크립트를 입력하세요.</p>
         <ServerScripts setup={creds.setup.setup} servers={creds.setup.servers} force={creds.rotated} />
       </section>
 

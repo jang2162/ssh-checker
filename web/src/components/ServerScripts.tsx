@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useId, useState, type ReactNode } from "react";
 import type { ServerSetup, SetupScript } from "../api/types.ts";
 import { withForce } from "../lib/command.ts";
 import { CopyButton } from "./CopyButton.tsx";
@@ -10,10 +10,12 @@ interface Props {
   /** 웹서버별 설정 예. 스크립트가 끝에 이 설정을 출력하므로 참고용이다. */
   servers: ServerSetup[];
   force?: boolean;
+  /** 실행 명령 아래, 웹서버 설정 예 위에 넣을 안내. */
+  children?: ReactNode;
 }
 
 /** 실행 명령은 하나이고, 웹서버(nginx, Apache, Caddy)별로는 서버 설정 예만 탭으로 보여 준다. */
-export function ServerScripts({ setup, servers, force = false }: Props) {
+export function ServerScripts({ setup, servers, force = false, children }: Props) {
   const [id, setId] = useState(servers[0]?.id ?? "");
   const panelId = useId();
   const current = servers.find((s) => s.id === id) ?? servers[0];
@@ -21,6 +23,7 @@ export function ServerScripts({ setup, servers, force = false }: Props) {
   return (
     <>
       <ScriptBlock script={setup} cmd={cmd} />
+      {children}
       {current && (
         <>
           <h3>웹서버 설정 예</h3>

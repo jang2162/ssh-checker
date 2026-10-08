@@ -200,13 +200,14 @@ func setupScript(baseURL string) string {
 	b.WriteString("  echo \"acme.sh $(acme_version) 설치 완료\"\n")
 	b.WriteString("fi\n\n")
 	b.WriteString("# 3) 웹서버를 정하고, 설치 위치를 확인한다. 설치된 웹서버를 찾아 기본값으로 제안한다.\n")
+	b.WriteString("DETECTED=\"\"\n") // set -u에서 감지된 것이 없을 때도 안전하도록 먼저 비워 둔다
 	ids := make([]string, 0, len(webServers))
 	for _, ws := range webServers {
 		ids = append(ids, ws.ID)
-		fmt.Fprintf(&b, "if find_bin %s >/dev/null; then DETECTED=\"${DETECTED:-} %s\"; fi\n", strings.Join(ws.Bins, " "), ws.ID)
+		fmt.Fprintf(&b, "if find_bin %s >/dev/null; then DETECTED=\"$DETECTED %s\"; fi\n", strings.Join(ws.Bins, " "), ws.ID)
 	}
 	b.WriteString("DETECTED=${DETECTED# }\n")
-	b.WriteString("if [ -n \"${DETECTED:-}\" ]; then echo \"감지된 웹서버: $DETECTED\"; else echo \"감지된 웹서버가 없습니다. 수동 설정(manual)으로 진행합니다: reload 스크립트를 직접 입력하세요.\"; fi\n")
+	b.WriteString("if [ -n \"$DETECTED\" ]; then echo \"감지된 웹서버: $DETECTED\"; else echo \"감지된 웹서버가 없습니다. 수동 설정(manual)으로 진행합니다: reload 스크립트를 직접 입력하세요.\"; fi\n")
 	b.WriteString("WEB_DEFAULT=${DETECTED%% *}\n")
 	fmt.Fprintf(&b, "ask WEB_SERVER \"웹서버 (%s, manual=수동)\" \"${WEB_DEFAULT:-manual}\"\n", strings.Join(ids, ", "))
 	b.WriteString("case \"$WEB_SERVER\" in\n")
