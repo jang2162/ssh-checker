@@ -16,7 +16,7 @@ type webServer struct {
 	Bins []string
 	// ConfDirs는 설정 디렉터리 후보다. 환경변수 WEB_CONF_DIR로 직접 정할 수 있다.
 	ConfDirs []string
-	// ReloadDefault는 RELOAD_CMD를 비웠을 때 쓰는 명령이다. 셸이 변수를 풀어서 쓴다.
+	// ReloadDefault는 RELOAD_CMD를 비웠을 때 쓰는 명령이다. 셸이 변수를 풀어서 쓴다. root이면 SUDO_CMD가 비어 sudo가 빠진다.
 	ReloadDefault string
 	// Group이면 키 파일을 읽을 그룹을 묻는다(caddy는 일반 사용자로 돈다).
 	Group bool
@@ -29,7 +29,7 @@ var webServers = []webServer{
 		ID: "nginx", Label: "nginx",
 		Bins:          []string{"nginx"},
 		ConfDirs:      []string{"/etc/nginx", "/usr/local/etc/nginx", "/opt/homebrew/etc/nginx"},
-		ReloadDefault: "sudo systemctl reload nginx",
+		ReloadDefault: "${SUDO_CMD:+$SUDO_CMD }systemctl reload nginx",
 		Config:        "ssl_certificate     %[1]s/fullchain.pem;\nssl_certificate_key %[1]s/key.pem;\n",
 	},
 	{
@@ -37,7 +37,7 @@ var webServers = []webServer{
 		// Debian 계열은 apache2, RHEL 계열은 httpd다.
 		Bins:          []string{"apache2", "httpd", "apachectl"},
 		ConfDirs:      []string{"/etc/apache2", "/etc/httpd", "/usr/local/etc/httpd", "/opt/homebrew/etc/httpd"},
-		ReloadDefault: "sudo systemctl reload apache2 || sudo systemctl reload httpd",
+		ReloadDefault: "${SUDO_CMD:+$SUDO_CMD }systemctl reload apache2 || ${SUDO_CMD:+$SUDO_CMD }systemctl reload httpd",
 		Config:        "SSLCertificateFile    %[1]s/fullchain.pem\nSSLCertificateKeyFile %[1]s/key.pem\n",
 	},
 	{
@@ -45,7 +45,7 @@ var webServers = []webServer{
 		Bins:     []string{"caddy"},
 		ConfDirs: []string{"/etc/caddy", "/usr/local/etc/caddy", "/opt/homebrew/etc/caddy"},
 		// caddy는 키 파일을 읽을 수 있어야 해서, 그룹을 맞춘 뒤 reload한다.
-		ReloadDefault: "sudo chgrp $CERT_GROUP $CERT_DIR/key.pem && chmod 640 $CERT_DIR/key.pem && sudo systemctl reload caddy",
+		ReloadDefault: "${SUDO_CMD:+$SUDO_CMD }chgrp $CERT_GROUP $CERT_DIR/key.pem && chmod 640 $CERT_DIR/key.pem && ${SUDO_CMD:+$SUDO_CMD }systemctl reload caddy",
 		Group:         true,
 		Config:        "example.com, *.example.com {\n\ttls %[1]s/fullchain.pem %[1]s/key.pem\n}\n",
 	},
@@ -184,6 +184,8 @@ func setupScript(baseURL string) string {
 	b.WriteString("\nSSLCHK_URL=${SSLCHK_URL%/}\n")
 	b.WriteString("# acme.sh의 dns_acmedns가 부르는 주소. 인증서를 받는 서버용 API와 스크립트는 /acme/ 아래에 있다.\n")
 	b.WriteString("ACMEDNS_BASE_URL=\"${ACMEDNS_BASE_URL:-$SSLCHK_URL/acme}\"; export ACMEDNS_BASE_URL\n")
+	// root이면 sudo가 필요 없다(설치되어 있지 않을 수도 있다). 일반 계정이면 sudo를 쓴다. 환경변수 SUDO_CMD로 바꿀 수 있다.
+	b.WriteString("\nif [ -z \"${SUDO_CMD+x}\" ]; then if [ \"$(id -u)\" = 0 ]; then SUDO_CMD=\"\"; else SUDO_CMD=sudo; fi; fi\n")
 	b.WriteString("\n# 1) 자격 증명을 입력받고, 이 서버의 IP가 허용 목록에 있는지 확인한다. 통과해야 아래에서 설치한다.\n")
 	b.WriteString("ask ACMEDNS_USERNAME \"username\"\n")
 	b.WriteString("ask ACMEDNS_PASSWORD \"password (입력은 보이지 않습니다)\" \"\" secret\n")
@@ -226,7 +228,9 @@ func setupScript(baseURL string) string {
 	b.WriteString("for d in ${WEB_CONF_DIR:-$WEB_CONF_DIRS}; do if [ -d \"$d\" ]; then WEB_CONF=$d; break; fi; done\n")
 	b.WriteString("if [ -n \"$WEB_CONF\" ]; then echo \"확인됨: $WEB_SERVER 설정 디렉터리 $WEB_CONF\"; else echo \"알림: $WEB_SERVER 설정 디렉터리를 찾지 못했습니다. 설정 반영 확인은 건너뜁니다 (위치를 알면 WEB_CONF_DIR로 넘기세요).\"; fi\n\n")
 	b.WriteString("# 4) 인증서를 저장할 도메인과 경로를 정한다.\n")
-	b.WriteString("ask DOMAIN \"인증서를 받을 도메인 (예: example.com)\"\n")
+	b.WriteString("ask DOMAIN \"인증서를 받을 도메인 (예: example.com, *.example.com도 함께 발급)\"\n")
+	// 와일드카드는 항상 함께 발급한다. *.example.com을 입력했다면 example.com으로 본다(그대로 쓰면 **.example.com이 된다).
+	b.WriteString("if [ \"${DOMAIN#\\*.}\" != \"$DOMAIN\" ]; then DOMAIN=${DOMAIN#\\*.}; echo \"알림: *.는 빼고 $DOMAIN으로 진행합니다. 와일드카드(*.$DOMAIN)는 함께 발급됩니다.\"; fi\n")
 	b.WriteString("# 도메인의 _acme-challenge CNAME이 ssl-checker가 알려 준 주소를 가리키는지 확인한다. 없으면 발급이 실패하므로 미리 알려 준다.\n")
 	b.WriteString("check_cname \"$DOMAIN\"\n")
 	b.WriteString("ask CERT_DIR \"인증서를 저장할 디렉터리\" \"/etc/ssl/$DOMAIN\"\n")
@@ -251,14 +255,19 @@ func setupScript(baseURL string) string {
 	b.WriteString("# FORCE=1이면 이미 인증서가 있어도 다시 발급해, 새 키를 도메인 설정에 저장한다.\n")
 	// 종료 코드 2는 "아직 갱신할 때가 아님"이다. 스크립트를 다시 돌려도 멈추지 않게 한다.
 	b.WriteString(`"$ACME_SH" --issue --keylength ec-256 --dns dns_acmedns -d "$DOMAIN" -d "*.$DOMAIN" ${FORCE:+--force} || [ "$?" -eq 2 ]` + "\n")
-	b.WriteString("sudo install -d -o \"$(id -un)\" \"$CERT_DIR\"\n")
+	// 저장 디렉터리는 sudo 없이 만들거나 쓸 수 있으면 그대로 쓴다. 안 될 때만 sudo로 만들고 소유자를 현재 계정으로 맞춘다
+	// (자동 갱신이 같은 계정으로 파일을 쓰기 때문이다).
+	b.WriteString("if ! { mkdir -p \"$CERT_DIR\" 2>/dev/null && [ -w \"$CERT_DIR\" ]; }; then\n")
+	b.WriteString("  echo \"인증서 저장 디렉터리($CERT_DIR)를 만들려면 sudo가 필요합니다. 비밀번호를 물으면 입력하세요.\"\n")
+	b.WriteString("  ${SUDO_CMD:+$SUDO_CMD }install -d -o \"$(id -un)\" \"$CERT_DIR\"\n")
+	b.WriteString("fi\n")
 	b.WriteString("\"$ACME_SH\" --install-cert -d \"$DOMAIN\" --ecc \\\n")
 	b.WriteString("  --key-file \"$CERT_DIR/key.pem\" \\\n")
 	b.WriteString("  --fullchain-file \"$CERT_DIR/fullchain.pem\" \\\n")
 	b.WriteString("  --reloadcmd \"$RELOAD_CMD\"\n\n")
 	b.WriteString("# 6) 웹서버 설정이 이 인증서를 쓰는지 확인하고, 아니면 넣을 설정을 보여 준다.\n")
 	b.WriteString("echo \"인증서를 저장했습니다: $CERT_DIR/fullchain.pem, $CERT_DIR/key.pem\"\n")
-	b.WriteString("if [ -n \"$WEB_CONF\" ] && sudo grep -rqsF -- \"$CERT_DIR/fullchain.pem\" \"$WEB_CONF\" 2>/dev/null; then\n")
+	b.WriteString("if [ -n \"$WEB_CONF\" ] && { grep -rqsF -- \"$CERT_DIR/fullchain.pem\" \"$WEB_CONF\" 2>/dev/null || { [ -n \"$SUDO_CMD\" ] && $SUDO_CMD -n grep -rqsF -- \"$CERT_DIR/fullchain.pem\" \"$WEB_CONF\" 2>/dev/null; }; }; then\n")
 	b.WriteString("  echo \"확인됨: $WEB_SERVER 설정이 이미 이 인증서를 쓰고 있습니다.\"\n")
 	b.WriteString("else\n")
 	b.WriteString("  echo \"$WEB_SERVER 설정에 아래를 넣고 reload하세요:\"\n")
@@ -267,7 +276,19 @@ func setupScript(baseURL string) string {
 		fmt.Fprintf(&b, "    %s)\n      cat <<EOF_CONFIG\n%sEOF_CONFIG\n      ;;\n", ws.ID, fmt.Sprintf(ws.Config, "$CERT_DIR"))
 	}
 	b.WriteString("    manual)\n      echo \"  인증서(체인 포함): $CERT_DIR/fullchain.pem\"\n      echo \"  개인 키:          $CERT_DIR/key.pem\"\n      ;;\n")
-	b.WriteString("  esac\nfi\n")
+	b.WriteString("  esac\nfi\n\n")
+	b.WriteString("# 7) 자동 갱신(cron)은 비밀번호를 입력할 수 없다. reload 명령이 sudo를 쓰는데 비밀번호가 필요하면 갱신 때 reload가 실패한다.\n")
+	b.WriteString("case \"$RELOAD_CMD\" in\n  *sudo*)\n")
+	b.WriteString("    sudo -k 2>/dev/null || true # 방금 입력한 비밀번호의 캐시를 지워야 정확히 알 수 있다\n")
+	b.WriteString("    if ! sudo -n true 2>/dev/null; then\n")
+	b.WriteString("      echo \"\" >&2\n")
+	b.WriteString("      echo \"경고: reload 명령이 sudo를 쓰는데, 이 계정은 sudo에 비밀번호가 필요합니다.\" >&2\n")
+	b.WriteString("      echo \"  자동 갱신(cron)은 비밀번호를 입력할 수 없어서, 인증서 파일은 갱신돼도 웹서버가 reload되지 않고 옛 인증서로 계속 서비스됩니다.\" >&2\n")
+	b.WriteString("      echo \"  둘 중 하나로 해결하세요:\" >&2\n")
+	b.WriteString("      echo \"  1) reload에 필요한 명령만 비밀번호 없이 허용합니다 (sudoers의 NOPASSWD, visudo로 편집).\" >&2\n")
+	b.WriteString("      echo \"  2) sudo 없이 실행되는 reload 스크립트를 RELOAD_CMD로 지정합니다 (예: docker 그룹이면 docker exec <컨테이너> ... reload).\" >&2\n")
+	b.WriteString("      echo \"  reload 명령을 바꾸려면 ~/.acme.sh/acme.sh --install-cert -d $DOMAIN --ecc --reloadcmd '<새 명령>'을 다시 실행하세요.\" >&2\n")
+	b.WriteString("    fi ;;\nesac\n")
 	return b.String()
 }
 

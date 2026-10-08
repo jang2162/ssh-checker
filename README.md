@@ -9,14 +9,14 @@
 ```
  서버(acme.sh) ──(1) 발급 요청──▶ Let's Encrypt
       │                              │
-      │(2) /update (TXT 값)          │(4) _acme-challenge.a.com 조회
+      │(2) /acme/update (TXT 값)          │(4) _acme-challenge.a.com 조회
       ▼                              ▼
  ssl-checker ──(3) TXT 기록──▶ <uuid>.acme-chk.net   ◀──CNAME── _acme-challenge.a.com
               (Cloudflare API)    (챌린지 전용 존)                  (a.com DNS, 최초 1회 등록)
 ```
 
 1. 각 서버의 acme.sh가 Let's Encrypt에 발급을 요청하고 검증 토큰을 받습니다.
-2. acme.sh가 계산한 TXT 값을 ssl-checker의 `/update`로 보냅니다.
+2. acme.sh가 계산한 TXT 값을 ssl-checker의 `/acme/update`로 보냅니다.
 3. ssl-checker가 챌린지 전용 존의 `<uuid>.<존>`에 TXT를 기록합니다.
 4. Let's Encrypt가 `_acme-challenge.a.com`을 조회하고, CNAME을 따라가 TXT를 확인합니다.
 
@@ -27,7 +27,7 @@
 - 인증서 모니터링: 도메인마다 점검 대상(호스트명·포트·SNI·서버 IP 목록)을 등록하면 주기적으로 만료일, 발급자, 체인, 호스트명, TLS 버전을 점검합니다. 서버마다 같은 인증서가 깔렸는지도 비교합니다.
 - 웹 대시보드: 누구나 상태를 볼 수 있고, 등록·수정·ACME 설정은 `ADMIN_KEY`로 로그인한 관리자만 합니다([대시보드](docs/guide/dashboard.md)).
 - `/llms.txt`: 에이전트가 ACME를 구성할 때 따라 할 절차입니다. 서버 주소와 챌린지 존이 채워져 있습니다.
-- acme-dns 호환 `/update` API: 원본 acme-dns와 응답이 같은지 자동 테스트로 확인합니다.
+- acme-dns 호환 `/update` API(`/acme/update`로도 받습니다): 원본 acme-dns와 응답이 같은지 자동 테스트로 확인합니다.
 - 도메인별 계정과 키: 키는 bcrypt 해시로만 저장하고, 계정마다 허용 IP 대역(`allowfrom`)을 지정할 수 있습니다.
 - 값 2개 유지: `a.com`과 `*.a.com`을 한 인증서로 발급할 때 필요한 TXT 2개를 함께 유지합니다.
 - DNS 공급자 인터페이스: 기본 구현체는 Cloudflare이고, 테스트용으로 메모리 구현체가 있습니다.
@@ -59,7 +59,7 @@ git clone <이 저장소> ssl-checker && cd ssl-checker
 | [설정](docs/guide/configuration.md) | 환경변수 전체 목록, 네트워크·프록시 설정, 비밀값 관리 |
 | [도메인 연결과 인증서 발급](docs/guide/onboarding.md) | 계정 등록, CNAME 등록, acme.sh 발급·설치·갱신, 서버 추가 |
 | [대시보드](docs/guide/dashboard.md) | 화면 사용법, 관리자 로그인, 대상 등록, ACME 켜기, `/llms.txt`, 화면 개발 |
-| [API 레퍼런스](docs/guide/api.md) | `/update`, `/register`, `/health`와 `/api`의 요청·응답·오류 코드 |
+| [API 레퍼런스](docs/guide/api.md) | `/acme/*`(update, verify, setup.sh), `/register`, `/health`와 `/api`의 요청·응답·오류 코드 |
 | [운영](docs/guide/operations.md) | 업데이트, 백업, 키 교체, 계정 폐기, 감사 로그, 문제 해결 |
 
 ## 명령
@@ -69,7 +69,7 @@ git clone <이 저장소> ssl-checker && cd ssl-checker
 | 명령 | 역할 |
 | --- | --- |
 | `ssl-checker migrate` | DB 마이그레이션을 적용하고 종료 |
-| `ssl-checker serve --listen :8080` | `/update`, `/register`, `/health`, `/api`, 대시보드, `/llms.txt` |
+| `ssl-checker serve --listen :8080` | `/acme/*`(update, verify, setup.sh), `/update`, `/register`, `/health`, `/api`, 대시보드, `/llms.txt` |
 | `ssl-checker worker` | 시작할 때 한 번, 그 뒤 24시간마다 고아 TXT 정리. `CHECK_INTERVAL`마다 TLS 점검과 CNAME 확인 |
 | `ssl-checker healthcheck [--url URL]` | 컨테이너 헬스체크용 `/health` 확인 |
 
@@ -80,6 +80,7 @@ Go 1.27 이상과 Docker가 필요합니다. 화면(`web/`)을 고치려면 Node
 ```bash
 make db-up && make test && make db-down   # 단위·통합 테스트 (Postgres 컨테이너 사용)
 make web-test && make web-build           # 화면 로직 테스트, 타입 검사와 빌드
+make script-test-linux                    # setup.sh 테스트를 Linux bash 5에서 (Docker 필요)
 ./scripts/smoke.sh                        # 이미지 + compose 스택 smoke 테스트
 ./scripts/compat.sh                       # 원본 acme-dns와 /update 응답 대조
 ```

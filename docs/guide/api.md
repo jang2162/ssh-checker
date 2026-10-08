@@ -222,11 +222,12 @@ ACME가 꺼진 도메인에 수정·재발급·확인·끄기를 부르면 409 `
 1. 자격 증명을 입력받아 `POST /acme/verify`로 **자격 증명과 이 서버의 IP가 허용 목록(`allowfrom`)에 있는지** 확인합니다.
 2. acme.sh가 3.1.4 이상인지 확인하고, 없거나 낮으면 설치합니다(만료 알림 메일 주소를 물어봅니다).
 3. 웹서버를 감지해 기본값으로 제안하고(`nginx`, `apache`, `caddy`), 실행 파일과 설정 디렉터리를 확인합니다. 감지되지 않거나 직접 reload하려면 `manual`을 골라 **reload 스크립트나 명령**(`RELOAD_CMD`)을 입력합니다. 경로로 준 스크립트는 실행할 수 있는지 확인합니다.
-4. 도메인을 입력받아 `_acme-challenge.<도메인>`의 **CNAME이 `/acme/verify`가 돌려준 `fulldomain`을 가리키는지** 공개 DNS(`DNS_RESOLVER`, 기본 `1.1.1.1`)로 확인합니다(`dig`, `host`, `nslookup`, 없으면 DNS over HTTPS). 없거나 다르면 등록할 레코드를 보여 주고, 터미널이면 등록한 뒤 다시 확인하고 아니면 멈춥니다. `SKIP_CNAME_CHECK=1`로 건너뜁니다.
-5. 인증서 저장 경로(`CERT_DIR`, 기본 `/etc/ssl/<도메인>`)와 reload 명령을 정하고 발급해 설치합니다.
+4. 도메인을 입력받아(`*.`는 빼고 `a.com`처럼 입력하며, 와일드카드 `*.a.com`은 항상 함께 발급합니다. `*.a.com`을 입력해도 `a.com`으로 봅니다) `_acme-challenge.<도메인>`의 **CNAME이 `/acme/verify`가 돌려준 `fulldomain`을 가리키는지** 공개 DNS(`DNS_RESOLVER`, 기본 `1.1.1.1`)로 확인합니다(`dig`, `host`, `nslookup`, 없으면 DNS over HTTPS). 없거나 다르면 등록할 레코드를 보여 주고, 터미널이면 등록한 뒤 다시 확인하고 아니면 멈춥니다. `SKIP_CNAME_CHECK=1`로 건너뜁니다.
+5. 인증서 저장 경로(`CERT_DIR`, 기본 `/etc/ssl/<도메인>`)와 reload 명령을 정하고 발급해 설치합니다. 저장 디렉터리는 sudo 없이 만들거나 쓸 수 있으면 sudo를 쓰지 않습니다.
 6. 웹서버 설정이 이 인증서를 이미 쓰는지 확인하고, 아니면 넣을 설정을 출력합니다.
+7. reload 명령이 `sudo`를 쓰는데 이 계정이 sudo에 비밀번호가 필요하면 경고합니다. 자동 갱신(cron)은 비밀번호를 입력할 수 없어 reload가 실패하기 때문입니다.
 
-환경변수로 미리 넘기면 묻지 않습니다: `ACMEDNS_USERNAME`, `ACMEDNS_PASSWORD`, `ACMEDNS_SUBDOMAIN`, `SSLCHK_URL`, `ACME_EMAIL`, `WEB_SERVER`, `DOMAIN`, `CERT_DIR`, `CERT_GROUP`(Caddy), `RELOAD_CMD`. 웹서버 설정 위치는 `WEB_CONF_DIR`, 실행 파일을 더 찾아볼 위치는 `WEB_SEARCH_DIRS`로 정하고, 실행 파일 확인은 `SKIP_WEB_CHECK=1`로 건너뜁니다.
+환경변수로 미리 넘기면 묻지 않습니다: `ACMEDNS_USERNAME`, `ACMEDNS_PASSWORD`, `ACMEDNS_SUBDOMAIN`, `SSLCHK_URL`, `ACME_EMAIL`, `WEB_SERVER`, `DOMAIN`, `CERT_DIR`, `CERT_GROUP`(Caddy), `RELOAD_CMD`. 웹서버 설정 위치는 `WEB_CONF_DIR`, 실행 파일을 더 찾아볼 위치는 `WEB_SEARCH_DIRS`로 정하고, 실행 파일 확인은 `SKIP_WEB_CHECK=1`로 건너뜁니다. root가 아닌 계정은 reload 기본 명령과 디렉터리 생성에 `sudo`를 쓰고, root는 쓰지 않습니다(`id -u`로 판단하며 `SUDO_CMD`로 바꿉니다. 비우면 sudo 없음). reload에 sudo가 필요한 서버는 root 셸(`sudo -i`)에서 실행하거나, reload 명령만 비밀번호 없이 허용(sudoers NOPASSWD)하세요.
 
 ## POST /acme/verify
 

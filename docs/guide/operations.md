@@ -100,7 +100,8 @@ psql-sslchk -c "SELECT at, actor, action, target, source_ip, detail FROM audit_l
 | --- | --- | --- |
 | `register` | 계정 등록 (`actor`=`admin`) | `subdomain=<uuid>` |
 | `update` | TXT 갱신 성공 | |
-| `update_denied` | `/update` 거부 | `invalid_credentials`, `ip_unauthorized`, `subdomain_mismatch`, `bad_txt`, `rate_limited` |
+| `update_denied` | `/acme/update`(옛 `/update`) 거부 | `invalid_credentials`, `ip_unauthorized`, `subdomain_mismatch`, `bad_txt`, `rate_limited` |
+| `verify_denied` | `/acme/verify`(`setup.sh`의 사전 점검) 거부 | `invalid_credentials`, `ip_unauthorized` |
 | `update_failed` | DNS 공급자나 DB 오류 | `transient: …` 또는 `config: …` |
 | `txt_cleanup` | worker 정리 (`actor`=`worker`) | `deleted`, `repaired` |
 | `login`, `login_denied` | 화면 로그인 성공·실패 (`actor`=`admin`·`anonymous`) | |
@@ -140,7 +141,7 @@ psql-sslchk -c "SELECT target, count(*), max(at) FROM audit_logs WHERE action = 
 | `api`가 시작 직후 종료 | `dc logs api`. 설정 오류면 문제 있는 변수 이름이 나옵니다(예: `ADMIN_KEY must be at least 32 bytes`). |
 | `/health`가 `provider: config` | 토큰 권한(`Zone > DNS > Edit`), `CF_ZONE_ID`, 토큰의 IP 필터 |
 | `/health`가 `provider: transient` | Cloudflare 응답 지연·요청 제한. 1분 뒤 다시 확인 |
-| acme.sh가 `/update`를 실패로 봄 (401) | 감사 로그의 `update_denied` 사유. `ip_unauthorized`면 `source_ip`와 계정의 `allowfrom`을 비교합니다. |
+| acme.sh가 `/acme/update`를 실패로 봄 (401) | 감사 로그의 `update_denied` 사유. `ip_unauthorized`면 `source_ip`와 계정의 `allowfrom`을 비교합니다. |
 | 401인데 감사 로그에 해당 계정 행이 없음 | `X-Api-User`가 틀렸거나 다른 계정입니다. `actor`에 보낸 값이 그대로 남습니다. |
 | 429 `too_many_attempts` | 이 IP에서 인증 실패가 쌓였습니다. 잘못된 키를 쓰는 서버를 고치고 잠시 기다립니다. |
 | `update_failed` + `config` | 토큰 권한, Zone ID, 토큰 IP 필터 |
@@ -149,7 +150,7 @@ psql-sslchk -c "SELECT target, count(*), max(at) FROM audit_logs WHERE action = 
 | CA가 CAA 때문에 거부 | 도메인의 CAA 레코드에 `letsencrypt.org` 추가 |
 | 대시보드에 `오래됨` 표시 | worker가 멈췄거나 점검 주기(`CHECK_INTERVAL`)의 2배 넘게 점검이 안 됐습니다. `dc ps worker`, `dc logs worker`를 확인합니다. |
 | `<앱>/`이 503 "화면이 빌드되지 않았습니다" | Docker 이미지가 아니라 화면 없이 `go build`한 바이너리입니다. `make web-build` 뒤 다시 빌드하거나 이미지를 씁니다. API는 정상입니다. |
-| 발급은 됐는데 웹서버가 옛 인증서를 씀 | `--install-cert`의 `--reloadcmd`가 실행 권한이 있는지, 웹서버 설정의 인증서 경로 |
+| 발급은 됐는데 웹서버가 옛 인증서를 씀 | `--install-cert`의 `--reloadcmd`가 실행 권한이 있는지, 웹서버 설정의 인증서 경로. reload가 `sudo`를 쓰는데 비밀번호가 필요하면 갱신(cron) 때 reload가 실패합니다([확인과 해결](onboarding.md#4-자동-갱신)) |
 
 ## 제거
 

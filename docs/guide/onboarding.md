@@ -88,6 +88,7 @@ curl -fsSL <앱>/acme/setup.sh -o setup.sh && bash setup.sh
 5. **인증서 저장 경로.** 저장 디렉터리(기본 `/etc/ssl/<도메인>`)와 설치 뒤 실행할 reload 명령을 정합니다. Caddy는 키 파일을 읽을 그룹도 묻습니다.
 6. **발급과 설치.** 발급해 저장하고, 갱신될 때마다 reload하도록 등록합니다.
 7. **웹서버 설정 확인.** 웹서버 설정이 이 인증서 경로를 이미 쓰는지 확인하고, 아니면 넣을 설정을 보여 줍니다.
+8. **갱신 점검.** reload 명령이 `sudo`를 쓰는데 비밀번호가 필요하면 경고합니다([자동 갱신](#4-자동-갱신) 참고).
 
 환경변수로 미리 넘기면 묻지 않습니다(터미널이 없는 자동화용). 기본값이 있는 값은 생략해도 됩니다.
 
@@ -99,7 +100,10 @@ curl -fsSL <앱>/acme/setup.sh -o setup.sh && bash setup.sh
 | acme.sh 설치 시 메일 주소 | `ACME_EMAIL` | 없음(설치할 때만 필요) |
 | 웹서버 | `WEB_SERVER` | 감지된 첫 웹서버. 없으면 `manual` (`nginx`, `apache`, `caddy`, `manual`) |
 | 웹서버 설정 디렉터리 | `WEB_CONF_DIR` | 웹서버별 흔한 위치(`/etc/nginx` 등) |
-| 인증서를 받을 도메인 | `DOMAIN` | 없음 |
+| 웹서버 실행 파일 확인 건너뛰기 | `SKIP_WEB_CHECK=1` | 확인함 |
+| 실행 파일을 더 찾아볼 위치 | `WEB_SEARCH_DIRS` | `/usr/sbin /usr/local/sbin /sbin /usr/local/bin /opt/homebrew/bin` |
+| reload와 디렉터리 생성에 붙일 sudo | `SUDO_CMD` | root면 없음, 아니면 `sudo`. 비우면 sudo를 쓰지 않습니다 |
+| 인증서를 받을 도메인 | `DOMAIN` | 없음. `*.` 없이 `example.com`처럼 입력합니다. 와일드카드는 항상 함께 발급되고, `*.example.com`을 입력해도 `example.com`으로 봅니다 |
 | CNAME 확인용 공개 리졸버 | `DNS_RESOLVER` | `1.1.1.1` |
 | CNAME 확인 건너뛰기 | `SKIP_CNAME_CHECK=1` | 확인함. 사내 DNS만 쓰는 등 공개 DNS로 볼 수 없을 때 |
 | 인증서를 저장할 디렉터리 | `CERT_DIR` | `/etc/ssl/<도메인>` |
@@ -158,6 +162,22 @@ acme.sh는 설치할 때 cron을 등록합니다. 갱신 시점이 되면 같은
 
 - 자격 증명(`ACMEDNS_*`)은 acme.sh가 도메인 설정(`~/.acme.sh/a.com_ecc/a.com.conf`)에 저장합니다. 그래서 갱신 때는 환경변수가 필요 없습니다. 이 파일에는 비밀번호가 평문으로 들어 있으므로 서버 접근 권한을 관리합니다.
 - 갱신 상태 확인: `~/.acme.sh/acme.sh --list`
+- **reload에 `sudo`가 있으면 비밀번호 없이 되어야 합니다.** 자동 갱신(cron)은 sudo 비밀번호를 입력할 수 없습니다. 비밀번호가 필요하면 인증서 파일은 갱신돼도 웹서버가 reload되지 않아 옛 인증서로 계속 서비스됩니다. 스크립트가 끝에서 이를 점검해 경고합니다. 이미 설치한 서버는 이렇게 확인합니다.
+
+  ```bash
+  # 저장된 reload 명령 (sudo가 있는지 본다)
+  sed -n "s/^Le_ReloadCmd='__ACME_BASE64__START_\(.*\)__ACME_BASE64__END_'/\1/p" ~/.acme.sh/a.com_ecc/a.com.conf | base64 -d; echo
+  # sudo가 비밀번호 없이 되는지 (실패하면 갱신 때 reload가 막힌다)
+  sudo -k; sudo -n true && echo "비밀번호 없이 가능" || echo "비밀번호 필요"
+  ```
+
+  고치는 방법은 셋 중 하나입니다.
+  1. **root 계정으로 설치합니다.** `sudo -i`(또는 `su -`)로 root 셸이 된 뒤 `setup.sh`를 실행하세요. root에서는 스크립트가 reload 기본 명령에서 `sudo`를 뺍니다. acme.sh와 갱신 cron도 root 것으로 등록되어 비밀번호 문제가 없습니다. `sudo bash setup.sh`는 피하세요. 환경에 따라 acme.sh와 cron이 일반 계정 쪽에 설치될 수 있습니다.
+  2. `visudo`로 reload 명령만 비밀번호 없이 허용합니다(`<계정> ALL=(root) NOPASSWD: /bin/systemctl reload nginx`). root보다 권한이 좁아 더 안전합니다.
+  3. sudo 없이 되는 reload 스크립트를 씁니다(예: docker 그룹이면 `docker exec <컨테이너> caddy reload ...`).
+
+  바꾼 명령은 `~/.acme.sh/acme.sh --install-cert -d a.com --ecc --reloadcmd '<새 명령>'`으로 다시 저장합니다. 계정을 바꿔 다시 설치하면 새로 발급하므로 Let's Encrypt의 같은 이름 발급 횟수 제한(주 5회)에 유의하세요.
+- 설치 중 `sudo` 비밀번호를 한 번 물을 수 있습니다. 인증서 저장 디렉터리를 쓸 수 없을 때 만들기 위해서이고, 갱신에는 필요하지 않습니다(디렉터리 소유자가 현재 계정이 됩니다).
 - 강제 갱신 테스트: `~/.acme.sh/acme.sh --renew -d a.com --ecc --force`
 
 ## 같은 도메인에 서버 추가

@@ -4,9 +4,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"testing"
+
+	"ssl-checker/internal/llmstxt"
 )
 
 // bashCmd는 제어 터미널이 없는 bash 프로세스를 만든다. 스크립트가 /dev/tty로 입력을 기다리지 않게 한다.
@@ -87,7 +90,15 @@ echo "curl" >> "$CALLS"
 printf '%s' "${VERIFY_BODY:-{\"ok\":true,\"source_ip\":\"203.0.113.9\",\"subdomain\":\"sub\",\"fulldomain\":\"sub.acme.example.test\"}}" > "$out"
 printf '%s' "${VERIFY_CODE:-200}"
 `)
-	e.write(filepath.Join(e.bin, "sudo"), "#!/bin/sh\necho \"sudo $*\" >> \"$CALLS\"\nexec \"$@\"\n")
+	// 가짜 sudo: 기록하고 그대로 실행한다. -n(비밀번호 묻지 않기)일 때 SUDO_NEEDS_PASSWORD가 있으면 실패한다.
+	e.write(filepath.Join(e.bin, "sudo"), `#!/bin/sh
+echo "sudo $*" >> "$CALLS"
+n=""
+while [ "$1" = -n ] || [ "$1" = -k ]; do [ "$1" = -n ] && n=1; shift; done
+[ -n "$n" ] && [ -n "$SUDO_NEEDS_PASSWORD" ] && exit 1
+[ $# -eq 0 ] && exit 0
+exec "$@"
+`)
 	// DNS 조회 도구. DIG_ANSWER가 응답이다(기본은 알맞은 CNAME, 비우면 레코드 없음).
 	e.write(filepath.Join(e.bin, "dig"), "#!/bin/sh\necho \"dig $*\" >> \"$CALLS\"\nprintf '%s\\n' \"${DIG_ANSWER-sub.acme.example.test.}\"\n")
 	e.write(filepath.Join(e.bin, "host"), "#!/bin/sh\nif [ -n \"$HOST_ANSWER\" ]; then echo \"$2 is an alias for $HOST_ANSWER.\"; else echo \"Host $2 not found: 3(NXDOMAIN)\"; fi\n")
@@ -129,6 +140,7 @@ func (e *setupEnv) run(script string, extra ...string) (string, error) {
 		"DOMAIN=a.com", "CERT_DIR=" + e.certDir,
 		// 이 컴퓨터에 설치된 웹서버나 설정 디렉터리를 보지 않게 한다(테스트가 시스템에 의존하지 않도록).
 		"WEB_SEARCH_DIRS=" + e.bin, "WEB_CONF_DIR=" + filepath.Join(e.home, "no-web-conf"),
+		"SUDO_CMD=sudo", // 일반 계정처럼 실행한다. root 동작은 따로 시험한다.
 	}, extra...)
 	out, err := cmd.CombinedOutput()
 	calls, _ := os.ReadFile(e.log)
@@ -451,5 +463,162 @@ func TestSetupScriptTakesSubdomainFromServer(t *testing.T) {
 	}
 	if got, err = e.run(setup, "WEB_SERVER=nginx", body, "ACMEDNS_SUBDOMAIN=sub"); err != nil || !strings.Contains(got, "env ACMEDNS_SUBDOMAIN=sub\n") {
 		t.Errorf("옛 서버는 환경변수로 받는다: err=%v\n%s", err, got)
+	}
+}
+
+// 도메인은 항상 와일드카드와 함께 발급한다. *.를 붙여 입력해도 같은 도메인으로 본다.
+func TestSetupScriptIssuesWildcardWithDomain(t *testing.T) {
+	e := newSetupEnv(t)
+	setup := allScripts()["setup"]
+	got, err := e.run(setup, "WEB_SERVER=nginx")
+	if err != nil || !strings.Contains(got, "-d a.com -d *.a.com") || strings.Contains(got, "알림: *.는 빼고") {
+		t.Errorf("도메인과 와일드카드를 함께 발급해야 한다: err=%v\n%s", err, got)
+	}
+	got, err = e.run(setup, "WEB_SERVER=nginx", "DOMAIN=*.a.com")
+	if err != nil || !strings.Contains(got, "알림: *.는 빼고 a.com으로 진행합니다") || !strings.Contains(got, "-d a.com -d *.a.com") ||
+		strings.Contains(got, "**.a.com") || !strings.Contains(got, "_acme-challenge.a.com CNAME") {
+		t.Errorf("*.a.com을 입력하면 a.com으로 보고 진행해야 한다: err=%v\n%s", err, got)
+	}
+}
+
+// 저장 디렉터리를 sudo 없이 쓸 수 있으면 sudo를 쓰지 않는다. 쓸 수 없을 때만 sudo로 만든다.
+func TestSetupScriptAvoidsSudoForWritableCertDir(t *testing.T) {
+	e := newSetupEnv(t)
+	setup := allScripts()["setup"]
+	got, err := e.run(setup, "WEB_SERVER=nginx")
+	if err != nil || strings.Contains(got, "sudo install") || strings.Contains(got, "sudo가 필요합니다") {
+		t.Errorf("쓸 수 있는 디렉터리는 sudo 없이 만들어야 한다: err=%v\n%s", err, got)
+	}
+	if _, statErr := os.Stat(e.certDir); statErr != nil {
+		t.Errorf("저장 디렉터리가 만들어져야 한다: %v", statErr)
+	}
+
+	if os.Geteuid() == 0 {
+		t.Skip("root는 어디든 쓸 수 있어 sudo 경로를 시험할 수 없다")
+	}
+	locked := filepath.Join(e.home, "locked")
+	if err := os.MkdirAll(locked, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(locked, 0o755)
+	got, _ = e.run(setup, "WEB_SERVER=nginx", "CERT_DIR="+filepath.Join(locked, "certs"))
+	if !strings.Contains(got, "저장 디렉터리("+filepath.Join(locked, "certs")+")를 만들려면 sudo가 필요합니다") || !strings.Contains(got, "sudo install -d -o ") {
+		t.Errorf("쓸 수 없으면 sudo로 만들고 이유를 알려야 한다:\n%s", got)
+	}
+}
+
+// 자동 갱신(cron)은 sudo 비밀번호를 입력할 수 없다. reload가 sudo를 쓰는데 비밀번호가 필요하면 미리 경고한다.
+func TestSetupScriptWarnsWhenReloadNeedsSudoPassword(t *testing.T) {
+	e := newSetupEnv(t)
+	setup := allScripts()["setup"]
+
+	got, err := e.run(setup, "WEB_SERVER=nginx", "SUDO_NEEDS_PASSWORD=1")
+	for _, want := range []string{"경고: reload 명령이 sudo를 쓰는데, 이 계정은 sudo에 비밀번호가 필요합니다", "자동 갱신(cron)은 비밀번호를 입력할 수 없어서", "NOPASSWD", "sudo 없이 실행되는 reload 스크립트"} {
+		if err != nil || !strings.Contains(got, want) {
+			t.Errorf("경고에 %q가 있어야 한다: err=%v\n%s", want, err, got)
+		}
+	}
+	// 방금 입력한 sudo 비밀번호의 캐시가 점검을 가리지 않도록 캐시를 지운다.
+	if !strings.Contains(got, "sudo -k") {
+		t.Errorf("sudo 캐시를 지워야 정확히 점검된다:\n%s", got)
+	}
+	// 비밀번호 없이 sudo가 되면 경고하지 않는다.
+	if got, err = e.run(setup, "WEB_SERVER=nginx"); err != nil || strings.Contains(got, "경고: reload 명령이 sudo") {
+		t.Errorf("비밀번호 없이 되면 경고하지 않는다: err=%v\n%s", err, got)
+	}
+	// reload 명령이 sudo를 쓰지 않으면 점검하지 않는다.
+	if got, err = e.run(setup, "WEB_SERVER=manual", "RELOAD_CMD=docker exec caddy caddy reload", "SUDO_NEEDS_PASSWORD=1"); err != nil || strings.Contains(got, "경고: reload 명령이 sudo") {
+		t.Errorf("sudo를 쓰지 않으면 경고하지 않는다: err=%v\n%s", err, got)
+	}
+}
+
+// root이면 sudo가 필요 없어서 reload 기본 명령과 디렉터리 생성에서 sudo를 뺀다. 일반 계정이면 sudo를 쓴다.
+func TestSetupScriptDropsSudoForRoot(t *testing.T) {
+	e := newSetupEnv(t)
+	setup := allScripts()["setup"]
+	for web, want := range map[string]string{
+		"nginx":  "--reloadcmd systemctl reload nginx",
+		"apache": "--reloadcmd systemctl reload apache2 || systemctl reload httpd",
+		"caddy":  "chgrp caddy " + e.certDir + "/key.pem && chmod 640 " + e.certDir + "/key.pem && systemctl reload caddy",
+	} {
+		got, err := e.run(setup, "WEB_SERVER="+web, "SUDO_CMD=", "SUDO_NEEDS_PASSWORD=1")
+		if err != nil || !strings.Contains(got, want) || strings.Contains(got, "sudo") || strings.Contains(got, "경고: reload 명령이 sudo") {
+			t.Errorf("%s: root에서는 sudo가 없어야 한다(%q): err=%v\n%s", web, want, err, got)
+		}
+	}
+	// 일반 계정은 sudo를 붙인다.
+	if got, err := e.run(setup, "WEB_SERVER=nginx"); err != nil || !strings.Contains(got, "--reloadcmd sudo systemctl reload nginx") {
+		t.Errorf("일반 계정은 sudo를 붙여야 한다: err=%v\n%s", err, got)
+	}
+}
+
+// SUDO_CMD를 정하지 않으면 실행하는 계정(id -u)을 따른다: root는 sudo 없음, 그 밖에는 sudo.
+func TestSetupScriptSudoDefaultFollowsAccount(t *testing.T) {
+	e := newSetupEnv(t)
+	setup := allScripts()["setup"]
+	cmd := bashCmd(t, setup)
+	cmd.Env = []string{
+		"HOME=" + e.home, "PATH=" + e.bin + ":/usr/bin:/bin", "CALLS=" + e.log, "WEB_SEARCH_DIRS=" + e.bin, "WEB_CONF_DIR=" + filepath.Join(e.home, "x"),
+		"SSLCHK_URL=https://ssl.example.com", "ACMEDNS_USERNAME=u", "ACMEDNS_PASSWORD=p", "DOMAIN=a.com", "CERT_DIR=" + e.certDir, "WEB_SERVER=nginx",
+	}
+	out, err := cmd.CombinedOutput()
+	calls, _ := os.ReadFile(e.log)
+	got := string(calls) + string(out)
+	want := "--reloadcmd sudo systemctl reload nginx"
+	if os.Geteuid() == 0 {
+		want = "--reloadcmd systemctl reload nginx"
+	}
+	if err != nil || !strings.Contains(got, want) {
+		t.Errorf("계정(euid=%d)에 맞는 reload 기본값이어야 한다(%q): err=%v\n%s", os.Geteuid(), want, err, got)
+	}
+}
+
+// 스크립트가 읽는 환경변수는 문서와 llms.txt에 모두 있어야 한다. 변수를 추가하고 문서를 빼먹는 일을 막는다.
+func TestSetupVariablesAreDocumented(t *testing.T) {
+	script := setupScript("https://ssl.example.com")
+	vars := map[string]bool{}
+	for _, re := range []*regexp.Regexp{
+		regexp.MustCompile(`(?m)^\s*ask ([A-Z][A-Z_]+)`),      // 물어보는 값
+		regexp.MustCompile(`\$\{([A-Z][A-Z_]+)(?::-|:\+|\+)`), // 환경에서 읽는 선택 값
+	} {
+		for _, m := range re.FindAllStringSubmatch(script, -1) {
+			vars[m[1]] = true
+		}
+	}
+	// 스크립트 안에서만 쓰는 값과 시험용 훅은 문서에 쓰지 않는다.
+	for _, internal := range []string{"CNAME_TOOL", "WEB_DEFAULT", "RELOAD_DEFAULT", "DETECTED"} {
+		delete(vars, internal)
+	}
+	if len(vars) < 15 {
+		t.Fatalf("변수를 제대로 추출하지 못했다: %v", vars)
+	}
+
+	read := func(path string) string {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	llms, err := llmstxt.Render(llmstxt.Data{BaseURL: "https://ssl.example.com", Zone: "acme.example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	docs := map[string]string{
+		"docs/guide/api.md":        read("../../docs/guide/api.md"),
+		"docs/guide/onboarding.md": read("../../docs/guide/onboarding.md"),
+		"llms.txt":                 llms,
+	}
+	// llms.txt는 에이전트가 따라 하는 문서라, 자주 안 쓰는 탐색 위치(WEB_SEARCH_DIRS)는 빼고 모두 있어야 한다.
+	llmsOptional := map[string]bool{"WEB_SEARCH_DIRS": true}
+	for v := range vars {
+		for name, text := range docs {
+			if name == "llms.txt" && llmsOptional[v] {
+				continue
+			}
+			if !strings.Contains(text, v) {
+				t.Errorf("setup.sh가 읽는 %s가 %s에 없다", v, name)
+			}
+		}
 	}
 }

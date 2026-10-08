@@ -35,7 +35,7 @@ export function Guide() {
               <h3>입력하는 값</h3>
               <ul className="plain">
                 <li><strong>username, password</strong>: ACME를 켤 때 나온 값입니다. password는 입력해도 보이지 않습니다.</li>
-                <li><strong>도메인</strong>: 인증서를 받을 도메인(예: <code>example.com</code>). <code>*.example.com</code>도 함께 받습니다.</li>
+                <li><strong>도메인</strong>: 인증서를 받을 도메인(예: <code>example.com</code>, <code>*.</code> 없이). <code>*.example.com</code>도 함께 받습니다.</li>
                 <li>나머지는 기본값이 채워져 있어 <strong>Enter</strong>만 누르면 됩니다.</li>
               </ul>
 
@@ -48,6 +48,7 @@ export function Guide() {
                 <li><strong>CNAME</strong>: <code>_acme-challenge.&lt;도메인&gt;</code>이 맞게 등록되었는지. 없으면 등록할 레코드를 보여 주고, 등록한 뒤 Enter로 다시 확인합니다.</li>
                 <li><strong>저장 경로</strong>: 기본 <code>/etc/ssl/&lt;도메인&gt;</code>. 발급, 설치, 갱신 시 reload까지 합니다.</li>
                 <li><strong>웹서버 설정</strong>: 이 인증서를 이미 쓰는지. 아니면 넣을 설정을 보여 줍니다.</li>
+                <li><strong>자동 갱신</strong>: reload가 <code>sudo</code>를 쓰는데 비밀번호가 필요하면 경고합니다. 갱신 때 reload가 실패하기 때문입니다.</li>
               </ul>
             </ServerScripts>
           </section>
@@ -71,6 +72,7 @@ export function Guide() {
                 </tbody>
               </table>
             </div>
+            <p><strong>reload에 <code>sudo</code>가 필요하면</strong> root 셸(<code>sudo -i</code>)에서 실행하세요. 자동 갱신은 sudo 비밀번호를 입력할 수 없습니다. root에서는 스크립트가 <code>sudo</code>를 빼고 설정합니다.</p>
             <p className="muted small-text">비밀번호는 셸 기록에 남지 않게 주의하세요. 터미널에서 실행하면 입력으로 받는 편이 안전합니다.</p>
           </section>
         </>

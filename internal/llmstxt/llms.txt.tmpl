@@ -95,9 +95,12 @@ ACMEDNS_USERNAME=<username> ACMEDNS_PASSWORD=<password> \
 2. **acme.sh 확인.** 3.1.4 이상인지 보고, 없거나 낮으면 설치합니다(`ACME_EMAIL`이 필요합니다).
 3. **웹서버 지정과 위치 확인.** 설치된 `nginx`, `apache`, `caddy`를 감지해 기본값으로 쓰고 실행 파일과 설정 디렉터리를 확인합니다(`WEB_SERVER`, `WEB_CONF_DIR`). **감지되지 않거나 직접 reload하려면 `WEB_SERVER=manual`로 두고 `RELOAD_CMD`에 reload 스크립트나 명령을 넘깁니다**(예: `RELOAD_CMD=/usr/local/bin/reload-web.sh`). 경로로 준 스크립트는 실행할 수 있는지 확인합니다.
 4. **CNAME 확인.** `DOMAIN`의 `_acme-challenge.<도메인>` CNAME이 `/acme/verify`가 돌려준 `fulldomain`을 가리키는지 공개 DNS(`DNS_RESOLVER`, 기본 `1.1.1.1`)로 확인합니다. 없거나 다르면 등록할 레코드를 알려 주고 멈춥니다(터미널이 없을 때). 3단계에서 `cname_record`를 등록한 뒤 DNS 전파를 기다려 다시 실행합니다. 확인을 건너뛰려면 `SKIP_CNAME_CHECK=1`입니다.
-5. **발급과 설치.** `CERT_DIR`(기본 `/etc/ssl/<도메인>`)에 저장하고 갱신될 때마다 `RELOAD_CMD`를 실행합니다. 웹서버별 기본 reload가 있고(Caddy는 `CERT_GROUP`도 씁니다), 이미 인증서가 있어도 안전하게 다시 실행됩니다.
+5. **발급과 설치.** `CERT_DIR`(기본 `/etc/ssl/<도메인>`)에 저장하고 갱신될 때마다 `RELOAD_CMD`를 실행합니다. 웹서버별 기본 reload가 있고(Caddy는 `CERT_GROUP`도 씁니다), 이미 인증서가 있어도 안전하게 다시 실행됩니다. 저장 디렉터리는 sudo 없이 만들 수 있으면 sudo를 쓰지 않습니다.
 6. **웹서버 설정 확인.** 설정이 이 인증서를 이미 쓰는지 확인하고, 아니면 넣을 설정을 출력합니다.
+7. **갱신 점검.** `RELOAD_CMD`가 `sudo`를 쓰는데 이 계정이 sudo에 비밀번호가 필요하면 경고합니다. 자동 갱신(cron)은 비밀번호를 입력할 수 없어 reload가 실패하기 때문입니다.
 
+- **도메인은 `a.com`처럼 `*.` 없이 넘깁니다.** 와일드카드(`*.a.com`)는 항상 함께 발급되고, `*.a.com`을 넘겨도 `a.com`으로 봅니다. 와일드카드는 한 단계 아래(`x.a.com`)까지만 적용됩니다.
+- **실행 계정:** reload에 sudo가 필요한 서버는 root 셸(`sudo -i`, `su -`)에서 실행합니다(`sudo bash setup.sh`는 피합니다). root에서는 스크립트가 reload 기본 명령에서 sudo를 빼고(`SUDO_CMD`로 바꿀 수 있습니다), acme.sh와 갱신 cron도 root 것으로 등록됩니다. root가 아니라면 reload 명령만 비밀번호 없이 허용(sudoers의 NOPASSWD)하거나 sudo 없이 되는 `RELOAD_CMD`를 씁니다. **에이전트는 sudo 비밀번호를 입력할 수 없습니다.**
 - 터미널이 없는 에이전트 셸에서는 값을 **환경변수로 넘겨야** 합니다. 환경변수가 있는 값은 묻지 않고, 기본값이 있는 값(`SSLCHK_URL`, `WEB_SERVER`, `CERT_DIR`, `RELOAD_CMD`, Caddy는 `CERT_GROUP`)은 생략할 수 있습니다. 사람이 터미널에서 실행하면 하나씩 물어보고, password는 화면에 보이지 않습니다.
 - 비밀번호를 로그, 티켓, 채팅에 남기지 마세요. 환경변수를 명령 앞에 붙이면 셸 기록에 남을 수 있으니, 대화형이면 입력으로 받는 편이 안전합니다.
 
@@ -159,6 +162,12 @@ curl -sS -X POST {{.BaseURL}}/api/domains/<id>/targets -H "$A" -H "$J" \
 - **`/acme/update`가 429 `rate_limited`:** 계정별 호출 빈도 제한입니다(처음 10번, 이후 6초에 1번). 잠시 뒤 다시 시도합니다.
 - **`/acme/update`가 429 `too_many_attempts`:** 이 IP에서 인증 실패가 너무 많았습니다. 자격 증명을 고치고 잠시 기다립니다.
 - **`/acme/update`가 500 `dns_provider_error`:** 이 서버가 DNS 공급자를 호출하지 못했습니다. 서버 관리자에게 `{{.BaseURL}}/health`를 확인해 달라고 합니다.
+- **`setup.sh`가 "이 서버의 IP(...)가 허용 IP 목록에 없습니다":** 알려 준 IP를 `PATCH /api/domains/<id>/acme`로 `allowfrom`에 추가하고 다시 실행합니다.
+- **`setup.sh`가 "CNAME이 없습니다" 또는 "다른 곳을 가리킵니다":** 안내한 `_acme-challenge.<도메인>` CNAME을 등록하고 DNS 전파를 기다린 뒤 다시 실행합니다. 사내 DNS만 쓰는 도메인이면 `SKIP_CNAME_CHECK=1`입니다.
+- **`setup.sh`가 "<웹서버> 실행 파일을 찾지 못했습니다":** `WEB_SERVER`를 맞게 넘기거나, 직접 reload한다면 `WEB_SERVER=manual RELOAD_CMD=<reload 스크립트>`로 실행합니다. 확인만 건너뛰려면 `SKIP_WEB_CHECK=1`입니다.
+- **`setup.sh`가 "경고: reload 명령이 sudo를 쓰는데...":** 발급은 됐지만 자동 갱신 때 reload가 실패합니다. 위 "실행 계정" 안내대로 root로 다시 설치하거나 NOPASSWD를 설정합니다.
+- **`setup.sh`가 "... 값이 필요합니다. 터미널에서 실행하거나 환경변수로 넘기세요":** 터미널이 없어 물어보지 못한 값입니다. 그 환경변수를 넘깁니다.
+- **`setup.sh`의 셸 오류(`unbound variable` 등):** 옛 `setup.sh`일 수 있습니다. 다시 내려받아 실행합니다.
 - **Let's Encrypt 검증 실패:** `acme/check`로 `cname_status`가 `ok`인지 먼저 봅니다. 도메인에 CAA 레코드가 있으면 `letsencrypt.org`를 허용해야 합니다.
 - **`CNAME_MISMATCH`:** ACME를 껐다 다시 켜면 서브도메인이 바뀝니다. 새 `cname_record`의 값으로 CNAME을 고칩니다.
 - **acme.sh가 "Skipping. Next renewal time is"를 출력:** 이미 발급된 인증서가 있어서 건너뛴 것입니다. 새 키를 저장해야 하면 `--force`를 붙입니다.
@@ -181,3 +190,4 @@ curl -sS -X POST {{.BaseURL}}/api/domains/<id>/targets -H "$A" -H "$J" \
 - 운영 CA로 발급 시험을 반복하지 않습니다. 먼저 `--staging`으로 확인합니다.
 - 도메인의 DNS는 `_acme-challenge` CNAME 한 줄 말고는 바꾸지 않습니다.
 - `allowfrom`을 비워 두지 않습니다.
+- reload 명령이 `sudo`를 쓰는데 비밀번호가 필요한 채로 두지 않습니다(자동 갱신 때 reload가 실패해 옛 인증서가 계속 쓰입니다).
